@@ -1,0 +1,15 @@
+{
+  "name": "vl53l0x",
+  "author": "",
+  "pins": ["VCC", "GND", "SCL", "SDA", "XSHUT", "GPIO1"],
+  "controls": [
+    {
+      "id": "distance",
+      "label": "Distance (mm)",
+      "type": "range",
+      "min": 30,
+      "max": 2000,
+      "step": 1
+    }
+  ]
+}

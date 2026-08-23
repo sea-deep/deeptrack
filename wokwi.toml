@@ -3,3 +3,11 @@ version = 1
 firmware = '.pio/build/esp32dev/firmware.bin'
 elf = '.pio/build/esp32dev/firmware.elf'
 rfc2217ServerPort = 4000
+
+[[chip]]
+name = "vl53l0x"
+binary = "dist/vl53l0x.wasm"
+
+[[chip]]
+name = "tb6612fng"
+binary = "dist/tb6612fng.wasm"

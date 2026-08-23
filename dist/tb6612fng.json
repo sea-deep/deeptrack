@@ -1,0 +1,5 @@
+{
+  "name": "tb6612fng",
+  "author": "",
+  "pins": ["VM","VCC","GND","AO1","AO2","BO2","BO1","GND2","PWMB","BIN2","BIN1","STBY","AIN1","AIN2","PWMA"]
+}
