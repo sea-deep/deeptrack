@@ -1,6 +1,6 @@
 {
-  "name": "VL53L0X Time-of-Flight Sensor",
-  "author": "Antigravity",
+  "name": "vl53l0x",
+  "author": "",
   "pins": [
     "VCC",
     "GND",

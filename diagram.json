@@ -1,74 +1,336 @@
 {
   "version": 1,
-  "author": "Antigravity",
+  "author": "",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0 },
-    { "type": "wokwi-servo", "id": "servo", "top": -150, "left": -200 },
-    { "type": "chip-vl53l0x", "id": "tof", "top": -150, "left": -50, "attrs": { "distance": "500" } },
-    { "type": "wokwi-hc-sr04", "id": "sonar", "top": -250, "left": 100 },
-    { "type": "chip-tb6612fng", "id": "drv", "top": 200, "left": -100 },
-    { "type": "wokwi-dht22", "id": "dht", "top": -100, "left": 250 },
-    { "type": "wokwi-potentiometer", "id": "gas", "top": 100, "left": 300 },
-    { "type": "wokwi-potentiometer", "id": "water", "top": 150, "left": 300 },
-    { "type": "wokwi-mpu6050", "id": "mpu", "top": -50, "left": 300 },
-    { "type": "wokwi-buzzer", "id": "buzzer", "top": 50, "left": -250 },
-    { "type": "wokwi-led", "id": "led_r", "top": 100, "left": -250, "attrs": { "color": "red" } },
-    { "type": "wokwi-led", "id": "led_g", "top": 150, "left": -250, "attrs": { "color": "green" } }
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": 0,
+      "left": 0
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "servo",
+      "top": -150,
+      "left": -200
+    },
+    {
+      "type": "chip-vl53l0x",
+      "id": "tof",
+      "top": -150,
+      "left": -50,
+      "attrs": {
+        "distance": "500"
+      }
+    },
+    {
+      "type": "wokwi-hc-sr04",
+      "id": "sonar",
+      "top": -250,
+      "left": 100
+    },
+    {
+      "type": "chip-tb6612fng",
+      "id": "drv",
+      "top": 200,
+      "left": -100
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht",
+      "top": -100,
+      "left": 250
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "gas",
+      "top": 100,
+      "left": 300
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "water",
+      "top": 150,
+      "left": 300
+    },
+    {
+      "type": "wokwi-mpu6050",
+      "id": "mpu",
+      "top": -50,
+      "left": 300
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "buzzer",
+      "top": 50,
+      "left": -250
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_r",
+      "top": 100,
+      "left": -250,
+      "attrs": {
+        "color": "red"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_g",
+      "top": 150,
+      "left": -250,
+      "attrs": {
+        "color": "green"
+      }
+    }
   ],
   "connections": [
-    [ "esp:GND.1", "servo:GND", "black", [] ],
-    [ "esp:5V", "servo:V+", "red", [] ],
-    [ "esp:13", "servo:PWM", "orange", [] ],
-    
-    [ "esp:3V3", "tof:VCC", "red", [] ],
-    [ "esp:GND.1", "tof:GND", "black", [] ],
-    [ "esp:22", "tof:SCL", "green", [] ],
-    [ "esp:21", "tof:SDA", "blue", [] ],
-    
-    [ "esp:5V", "sonar:VCC", "red", [] ],
-    [ "esp:GND.1", "sonar:GND", "black", [] ],
-    [ "esp:19", "sonar:TRIG", "green", [] ],
-    [ "esp:18", "sonar:ECHO", "orange", [] ],
-    
-    [ "esp:3V3", "mpu:VCC", "red", [] ],
-    [ "esp:GND.1", "mpu:GND", "black", [] ],
-    [ "esp:22", "mpu:SCL", "green", [] ],
-    [ "esp:21", "mpu:SDA", "blue", [] ],
-
-    [ "esp:3V3", "dht:VCC", "red", [] ],
-    [ "esp:GND.1", "dht:GND", "black", [] ],
-    [ "esp:23", "dht:SDA", "green", [] ],
-
-    [ "esp:3V3", "gas:VCC", "red", [] ],
-    [ "esp:GND.1", "gas:GND", "black", [] ],
-    [ "esp:34", "gas:SIG", "green", [] ],
-
-    [ "esp:3V3", "water:VCC", "red", [] ],
-    [ "esp:GND.1", "water:GND", "black", [] ],
-    [ "esp:36", "water:SIG", "green", [] ],
-    
-    [ "esp:GND.1", "buzzer:1", "black", [] ],
-    [ "esp:4", "buzzer:2", "purple", [] ],
-
-    [ "esp:GND.1", "led_r:C", "black", [] ],
-    [ "esp:26", "led_r:A", "red", [] ],
-
-    [ "esp:GND.1", "led_g:C", "black", [] ],
-    [ "esp:27", "led_g:A", "green", [] ],
-
-    [ "esp:GND.2", "drv:GND", "black", [] ],
-    [ "esp:GND.2", "drv:GND2", "black", [] ],
-    [ "esp:3V3", "drv:VCC", "red", [] ],
-    [ "esp:5V", "drv:VM", "red", [] ],
-    [ "esp:5", "drv:STBY", "purple", [] ],
-    
-    [ "esp:25", "drv:PWMA", "green", [] ],
-    [ "esp:16", "drv:AIN1", "blue", [] ],
-    [ "esp:17", "drv:AIN2", "orange", [] ],
-    
-    [ "esp:14", "drv:PWMB", "green", [] ],
-    [ "esp:33", "drv:BIN1", "blue", [] ],
-    [ "esp:2", "drv:BIN2", "orange", [] ]
+    [
+      "esp:GND.1",
+      "servo:GND",
+      "black",
+      []
+    ],
+    [
+      "esp:5V",
+      "servo:V+",
+      "red",
+      []
+    ],
+    [
+      "esp:13",
+      "servo:PWM",
+      "orange",
+      []
+    ],
+    [
+      "esp:3V3",
+      "tof:VCC",
+      "red",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "tof:GND",
+      "black",
+      []
+    ],
+    [
+      "esp:22",
+      "tof:SCL",
+      "green",
+      []
+    ],
+    [
+      "esp:21",
+      "tof:SDA",
+      "blue",
+      []
+    ],
+    [
+      "esp:5V",
+      "sonar:VCC",
+      "red",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "sonar:GND",
+      "black",
+      []
+    ],
+    [
+      "esp:19",
+      "sonar:TRIG",
+      "green",
+      []
+    ],
+    [
+      "esp:18",
+      "sonar:ECHO",
+      "orange",
+      []
+    ],
+    [
+      "esp:3V3",
+      "mpu:VCC",
+      "red",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "mpu:GND",
+      "black",
+      []
+    ],
+    [
+      "esp:22",
+      "mpu:SCL",
+      "green",
+      []
+    ],
+    [
+      "esp:21",
+      "mpu:SDA",
+      "blue",
+      []
+    ],
+    [
+      "esp:3V3",
+      "dht:VCC",
+      "red",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "dht:GND",
+      "black",
+      []
+    ],
+    [
+      "esp:23",
+      "dht:SDA",
+      "green",
+      []
+    ],
+    [
+      "esp:3V3",
+      "gas:VCC",
+      "red",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "gas:GND",
+      "black",
+      []
+    ],
+    [
+      "esp:34",
+      "gas:SIG",
+      "green",
+      []
+    ],
+    [
+      "esp:3V3",
+      "water:VCC",
+      "red",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "water:GND",
+      "black",
+      []
+    ],
+    [
+      "esp:36",
+      "water:SIG",
+      "green",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "buzzer:1",
+      "black",
+      []
+    ],
+    [
+      "esp:4",
+      "buzzer:2",
+      "purple",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "led_r:C",
+      "black",
+      []
+    ],
+    [
+      "esp:26",
+      "led_r:A",
+      "red",
+      []
+    ],
+    [
+      "esp:GND.1",
+      "led_g:C",
+      "black",
+      []
+    ],
+    [
+      "esp:27",
+      "led_g:A",
+      "green",
+      []
+    ],
+    [
+      "esp:GND.2",
+      "drv:GND",
+      "black",
+      []
+    ],
+    [
+      "esp:GND.2",
+      "drv:GND2",
+      "black",
+      []
+    ],
+    [
+      "esp:3V3",
+      "drv:VCC",
+      "red",
+      []
+    ],
+    [
+      "esp:5V",
+      "drv:VM",
+      "red",
+      []
+    ],
+    [
+      "esp:5",
+      "drv:STBY",
+      "purple",
+      []
+    ],
+    [
+      "esp:25",
+      "drv:PWMA",
+      "green",
+      []
+    ],
+    [
+      "esp:16",
+      "drv:AIN1",
+      "blue",
+      []
+    ],
+    [
+      "esp:17",
+      "drv:AIN2",
+      "orange",
+      []
+    ],
+    [
+      "esp:14",
+      "drv:PWMB",
+      "green",
+      []
+    ],
+    [
+      "esp:33",
+      "drv:BIN1",
+      "blue",
+      []
+    ],
+    [
+      "esp:2",
+      "drv:BIN2",
+      "orange",
+      []
+    ]
   ]
 }
