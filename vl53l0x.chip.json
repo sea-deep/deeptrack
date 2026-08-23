@@ -1,14 +1,7 @@
 {
   "name": "vl53l0x",
   "author": "",
-  "pins": [
-    "VCC",
-    "GND",
-    "SCL",
-    "SDA",
-    "XSHUT",
-    "GPIO1"
-  ],
+  "pins": ["VCC", "GND", "SCL", "SDA", "XSHUT", "GPIO1"],
   "controls": [
     {
       "id": "distance",
