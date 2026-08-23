@@ -128,7 +128,9 @@ void setup() {
     scanServo.attach(SERVO_PIN, 500, 2400);
     
     if (!mpu.begin()) Serial.println("Failed to find MPU6050");
-    if (!lox.begin()) Serial.println("Failed to boot VL53L0X");
+    if (!lox.begin(0x29, true)) {
+        Serial.println("Failed to boot VL53L0X");
+    }
 
     WiFi.mode(WIFI_STA);
     if (esp_now_init() != ESP_OK) {

@@ -86,10 +86,10 @@
     {
       "type": "wokwi-text",
       "id": "front_label",
-      "top": -401,
-      "left": 380,
+      "top": -390,
+      "left": 350,
       "attrs": {
-        "text": "HC-SR04 MOUNTED ON SG90 SCAN SERVO - ROTATES TO SCAN LEFT/RIGHT"
+        "text": "HC-SR04 FIXED FORWARD SENSOR (TRIG=19, ECHO=18)"
       }
     },
     {
@@ -172,10 +172,10 @@
     {
       "type": "wokwi-text",
       "id": "servo_label",
-      "top": -401,
-      "left": 620,
+      "top": -390,
+      "left": 600,
       "attrs": {
-        "text": "SG90 SCANNING SERVO - GPIO13 - CARRIES THE HC-SR04"
+        "text": "SG90 SCANNING SERVO (GPIO13)"
       }
     },
     {
@@ -318,10 +318,10 @@
     {
       "type": "wokwi-text",
       "id": "tof_label",
-      "top": -380,
-      "left": 226,
+      "top": -390,
+      "left": 100,
       "attrs": {
-        "text": "VL53L0X ToF (on servo) - I2C GPIO21/22"
+        "text": "VL53L0X ToF SENSOR (ON SERVO) - I2C (21, 22)"
       }
     },
     {
