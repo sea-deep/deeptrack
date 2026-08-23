@@ -327,17 +327,66 @@
     {
       "type": "chip-tb6612fng",
       "id": "driver",
-      "top": 120,
-      "left": 270,
+      "top": 180,
+      "left": 350,
       "attrs": {}
     },
     {
       "type": "wokwi-text",
       "id": "driver_label",
-      "top": 80,
-      "left": 189,
+      "top": 130,
+      "left": 240,
       "attrs": {
-        "text": "TB6612FNG - ChA=LEFT motors (GPIO25,16,17), ChB=RIGHT motors (GPIO14,33,2), STBY=GPIO5"
+        "text": "TB6612FNG MOTOR DRIVER - ChA: LEFT (25,16,17) | ChB: RIGHT (14,33,2) | STBY: 5"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "tt_motor_fl",
+      "top": 140,
+      "left": 180,
+      "attrs": {
+        "color": "yellow",
+        "label": "TT MOTOR FL (LEFT)"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "tt_motor_rl",
+      "top": 240,
+      "left": 180,
+      "attrs": {
+        "color": "yellow",
+        "label": "TT MOTOR RL (LEFT)"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "tt_motor_fr",
+      "top": 140,
+      "left": 550,
+      "attrs": {
+        "color": "cyan",
+        "label": "TT MOTOR FR (RIGHT)"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "tt_motor_rr",
+      "top": 240,
+      "left": 550,
+      "attrs": {
+        "color": "cyan",
+        "label": "TT MOTOR RR (RIGHT)"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "tt_motors_label",
+      "top": 320,
+      "left": 200,
+      "attrs": {
+        "text": "4x TT DC MOTORS - LEFT PAIR WIRED IN PARALLEL TO AO1/AO2 | RIGHT PAIR TO BO1/BO2"
       }
     }
   ],
@@ -858,6 +907,78 @@
       [
         "v60",
         "h80"
+      ]
+    ],
+    [
+      "tt_motor_fl:A",
+      "driver:AO1",
+      "yellow",
+      [
+        "h-20",
+        "v40"
+      ]
+    ],
+    [
+      "tt_motor_fl:C",
+      "driver:AO2",
+      "black",
+      [
+        "h-30",
+        "v60"
+      ]
+    ],
+    [
+      "tt_motor_rl:A",
+      "driver:AO1",
+      "yellow",
+      [
+        "h-20",
+        "v-40"
+      ]
+    ],
+    [
+      "tt_motor_rl:C",
+      "driver:AO2",
+      "black",
+      [
+        "h-30",
+        "v-20"
+      ]
+    ],
+    [
+      "tt_motor_fr:A",
+      "driver:BO1",
+      "cyan",
+      [
+        "h20",
+        "v40"
+      ]
+    ],
+    [
+      "tt_motor_fr:C",
+      "driver:BO2",
+      "black",
+      [
+        "h30",
+        "v60"
+      ]
+    ],
+    [
+      "tt_motor_rr:A",
+      "driver:BO1",
+      "cyan",
+      [
+        "h20",
+        "v-40"
+      ]
+    ],
+    [
+      "tt_motor_rr:C",
+      "driver:BO2",
+      "black",
+      [
+        "h30",
+        "v-20"
       ]
     ]
   ],

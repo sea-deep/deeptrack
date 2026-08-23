@@ -55,14 +55,7 @@ static uint8_t on_i2c_read(void *user_data) {
   
   if (chip->reg_ptr == REG_SYSRANGE_START) {
     value = 0x00;
-  } else if (chip->reg_ptr == REG_RESULT_INTERRUPT_STATUS) {
-    if (chip->registers[0x0B] != 0) {
-      value = 0x00;
-      chip->registers[0x0B] = 0x00;
-    } else {
-      value = 0x04;
-    }
-  } else if (chip->reg_ptr == REG_RESULT_RANGE_STATUS) {
+  } else if (chip->reg_ptr == 0x83) {
     value = 0x01;
   }
 
@@ -79,10 +72,25 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
   } else {
     chip->registers[chip->reg_ptr] = data;
     
-    if (chip->reg_ptr == 0x0B && data == 0x01) {
-      chip->registers[0x0B] = 0x01;
+    if (chip->reg_ptr == 0x0B) { // SYSTEM_INTERRUPT_CLEAR
+      chip->registers[REG_RESULT_INTERRUPT_STATUS] = 0x00;
+      chip->registers[REG_RESULT_RANGE_STATUS] = 0x00;
     } else if (chip->reg_ptr == REG_SYSRANGE_START) {
       update_measurement_registers(chip);
+      chip->registers[REG_RESULT_INTERRUPT_STATUS] = 0x04;
+      chip->registers[REG_RESULT_RANGE_STATUS] = 0x01;
+    } else if (chip->reg_ptr == 0x94) { // NVM Read selector
+      if (data == 0x6B) {
+        chip->registers[0x90] = 0x00;
+        chip->registers[0x91] = 0x00;
+        chip->registers[0x92] = 0x84; // 4 aperture SPADs
+        chip->registers[0x93] = 0x00;
+      } else {
+        chip->registers[0x90] = 0xFF; // All good SPADs
+        chip->registers[0x91] = 0xFF;
+        chip->registers[0x92] = 0xFF;
+        chip->registers[0x93] = 0xFF;
+      }
     }
     
     chip->reg_ptr++;
