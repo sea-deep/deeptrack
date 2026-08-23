@@ -1,30 +1,32 @@
 #pragma once
+
 #include <stdint.h>
 
-/*
-  Shared telemetry packet for ESP-NOW communication between
-  the Rover ESP32 and the Gateway ESP32.
-  48 bytes — well under ESP-NOW's 250-byte limit.
-
-  Also used by the gateway to parse Serial2 bridge JSON
-  and to relay JSON to the laptop dashboard.
-*/
-
+// Standard telemetry (sent slowly)
 typedef struct __attribute__((packed)) {
-  float    tempC;        // DHT22 temperature (°C)
-  float    humidity;     // DHT22 relative humidity (%)
-  int16_t  gasRaw;       // MQ-4 Methane sensor ADC (0-4095)
-  float    frontCm;      // HC-SR04 front distance (cm)
-  int16_t  tofRaw;       // VL53L0X sim pot ADC (0-4095)
-  float    tiltDeg;      // MPU6050 tilt angle (degrees)
-  int16_t  waterRaw;     // Water sensor ADC (0-4095)
-  uint32_t encL, encR;   // Wheel encoder pulse counts
-  float    x, y;         // Dead-reckoned position (cm)
-  float    heading;      // Heading (degrees, 0=+X, CCW positive)
-  uint8_t  state;        // 0=NORMAL 1=SLOW 2=AVOIDING 3=DANGER
-  uint8_t  dangerCause;  // 0=NONE 1=GAS 2=TILT 3=WATER 4=TEMP 5=HUMIDITY 6=TRAPPED
+    float temperature;
+    float humidity;
+    float ax, ay, az;
+    float gx, gy, gz;
+    uint16_t gasRaw;
+    uint16_t waterRaw;
+    uint32_t dangerState; // 0=safe, 1=danger
 } TelemetryPacket;
 
-// String lookups for JSON serialization / LCD display
-static const char* const STATE_NAMES[]  = {"NORMAL","SLOW","AVOIDING","DANGER"};
-static const char* const DANGER_NAMES[] = {"NONE","GAS","TILT","WATER","TEMP","HUMIDITY","TRAPPED"};
+// Fast scan telemetry (sent rapidly)
+typedef struct __attribute__((packed)) {
+    uint8_t type;         // 1 = scan
+    uint8_t seq;          // Sequence number
+    int16_t angle_deg;    // Servo angle in degrees
+    uint16_t distance_mm; // VL53L0X distance
+    uint8_t valid;        // 1 if valid, 0 if out of range
+    uint32_t timestamp_ms; // timestamp
+} ScanPacket;
+
+// Gateway to Rover control packet (Heartbeat)
+typedef struct __attribute__((packed)) {
+    uint8_t type;         // 0 = command
+    int16_t motor_l;      // -255 to 255
+    int16_t motor_r;      // -255 to 255
+} ControlPacket;
+
