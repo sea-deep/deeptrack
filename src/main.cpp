@@ -137,7 +137,7 @@ void setup() {
     }
     esp_now_register_recv_cb(onDataRecv);
     
-    esp_now_peer_info_t peerInfo;
+    esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, gatewayAddress, 6);
     peerInfo.channel = 0;  
     peerInfo.encrypt = false;

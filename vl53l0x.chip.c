@@ -109,8 +109,12 @@ void chip_init(void) {
   chip->registers[REG_IDENTIFICATION_MODEL_ID] = 0xEE;
   chip->registers[0xC1] = 0xAA;
   chip->registers[REG_IDENTIFICATION_REVISION_ID] = 0x10;
-  chip->registers[0x51] = 0x00; // VCSEL Period
+  chip->registers[0x51] = 0x00; // Expected Model ID check 0x0099
+  chip->registers[0x52] = 0x99;
   chip->registers[0x61] = 0x00;
+  chip->registers[0x62] = 0x00;
+  chip->registers[0x88] = 0x00;
+  chip->registers[0x89] = 0x00;
   chip->registers[REG_RESULT_INTERRUPT_STATUS] = 0x07;
   
   // Initial measurement values
