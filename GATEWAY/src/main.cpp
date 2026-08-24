@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+
+#define USE_ESP_NOW 0
+
 #include <PubSubClient.h>
 #include "telemetry_packet.h"
 
@@ -48,6 +51,27 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     }
 }
 
+
+void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+    String msg;
+    for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+    if (String(topic) == "rover/control") {
+        if (msg.startsWith("L:")) {
+            int spaceIdx = msg.indexOf(' ');
+            if (spaceIdx > -1) {
+                ControlPacket pkt;
+                pkt.type = 0;
+                pkt.motor_l = msg.substring(2, spaceIdx).toInt();
+                pkt.motor_r = msg.substring(msg.indexOf("R:") + 2).toInt();
+#if USE_ESP_NOW
+                esp_now_send(roverAddress, (uint8_t*)&pkt, sizeof(ControlPacket));
+#endif
+                Serial.println(msg); // Bridge to Wokwi Simulator
+            }
+        }
+    }
+}
+
 void reconnectMqtt() {
     if (!mqttClient.connected()) {
         Serial.println("Connecting to MQTT...");
@@ -55,6 +79,7 @@ void reconnectMqtt() {
         clientId += String(random(0xffff), HEX);
         if (mqttClient.connect(clientId.c_str())) {
             Serial.println("MQTT Connected");
+            mqttClient.subscribe("rover/control");
         }
     }
 }
@@ -71,6 +96,8 @@ void setup() {
     }
     
     mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+    mqttClient.setCallback(onMqttMessage);
+#if USE_ESP_NOW
     
     if (esp_now_init() != ESP_OK) {
         Serial.println("ESP-NOW Init Failed");
@@ -83,6 +110,7 @@ void setup() {
     peerInfo.channel = 0;  
     peerInfo.encrypt = false;
     esp_now_add_peer(&peerInfo);
+#endif
 }
 
 void loop() {
@@ -91,18 +119,46 @@ void loop() {
         mqttClient.loop();
     }
     
-    // Check serial for commands from the dashboard
+
+    // Check serial for commands (direct typing) or telemetry (from Wokwi Bridge)
+
     if (Serial.available()) {
-        String cmd = Serial.readStringUntil('\n');
-        if (cmd.startsWith("L:")) {
-            int spaceIdx = cmd.indexOf(' ');
+        String line = Serial.readStringUntil('\n');
+        
+        // Check for commands (direct typing)
+        if (line.startsWith("L:")) {
+            int spaceIdx = line.indexOf(' ');
             if (spaceIdx > -1) {
                 ControlPacket pkt;
                 pkt.type = 0;
-                pkt.motor_l = cmd.substring(2, spaceIdx).toInt();
-                pkt.motor_r = cmd.substring(cmd.indexOf("R:") + 2).toInt();
+                pkt.motor_l = line.substring(2, spaceIdx).toInt();
+                pkt.motor_r = line.substring(line.indexOf("R:") + 2).toInt();
+#if USE_ESP_NOW
                 esp_now_send(roverAddress, (uint8_t*)&pkt, sizeof(ControlPacket));
+#endif
+            }
+        } else {
+            // Extract JSON telemetry from Wokwi Serial Bridge
+            int start = line.indexOf('{');
+            int end = line.lastIndexOf('}');
+            if (start >= 0 && end > start) {
+                String jsonSub = line.substring(start, end + 1);
+                if (jsonSub.indexOf("\"type\":\"scan\"") > 0) {
+                     if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_SCAN, jsonSub.c_str());
+                } else {
+                     if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_TELEMETRY, jsonSub.c_str());
+                }
             }
         }
     }
+        } else if (line.startsWith("{")) {
+            // It's telemetry from Wokwi Serial Bridge!
+            if (line.indexOf("\"type\":\"scan\"") > 0) {
+                 if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_SCAN, line.c_str());
+            } else {
+                 if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_TELEMETRY, line.c_str());
+            }
+        }
+    }
+
 }

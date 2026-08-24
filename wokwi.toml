@@ -6,8 +6,8 @@ rfc2217ServerPort = 4000
 
 [[chip]]
 name = "vl53l0x"
-binary = "dist/vl53l0x.wasm"
+binary = "dist/vl53l0x_v2.wasm"
 
 [[chip]]
 name = "tb6612fng"
-binary = "dist/tb6612fng.wasm"
+binary = "dist/tb6612fng_v2.wasm"

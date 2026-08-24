@@ -2,6 +2,9 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <esp_now.h>
+
+#define USE_ESP_NOW 0
+
 #include <DHT.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
@@ -133,6 +136,7 @@ void setup() {
     }
 
     WiFi.mode(WIFI_STA);
+#if USE_ESP_NOW
     if (esp_now_init() != ESP_OK) {
         Serial.println("Error initializing ESP-NOW");
         return;
@@ -144,6 +148,7 @@ void setup() {
     peerInfo.channel = 0;  
     peerInfo.encrypt = false;
     esp_now_add_peer(&peerInfo);
+#endif
 }
 
 void shortBrake() {
@@ -200,6 +205,19 @@ float readUltrasonic() {
 void loop() {
     uint32_t now = millis();
 
+    if (Serial.available()) {
+        String cmd = Serial.readStringUntil('\n');
+        if (cmd.startsWith("L:")) {
+            int spaceIdx = cmd.indexOf(' ');
+            if (spaceIdx > -1) {
+                target_l = cmd.substring(2, spaceIdx).toInt();
+                target_r = cmd.substring(cmd.indexOf("R:") + 2).toInt();
+                emergencyStopped = false;
+            }
+        }
+    }
+
+
     // 1. Ultrasonic Obstacle Check (Fixed Forward)
     float frontDist = readUltrasonic();
     if (frontDist < OBSTACLE_STOP_CM && frontDist > 0) {
@@ -236,8 +254,19 @@ void loop() {
             spkt.distance_mm = 800;
             spkt.valid = 0;
         }
+#if USE_ESP_NOW
+        
         
         esp_now_send(gatewayAddress, (uint8_t *) &spkt, sizeof(ScanPacket));
+#endif
+        
+        char json[128];
+        snprintf(json, sizeof(json),
+            "{\"type\":\"scan\",\"seq\":%d,\"angle_deg\":%d,\"distance_mm\":%d,\"valid\":%s,\"timestamp_ms\":%u}",
+            spkt.seq, spkt.angle_deg, spkt.distance_mm, spkt.valid ? "true" : "false", spkt.timestamp_ms
+        );
+        Serial.println(json);
+
         
         currentAngle += scanDirection;
         if (currentAngle >= 150 || currentAngle <= 30) {
@@ -272,7 +301,22 @@ void loop() {
         } else {
             noTone(BUZZER_PIN);
         }
+#if USE_ESP_NOW
 
+        
         esp_now_send(gatewayAddress, (uint8_t *) &currentTelemetry, sizeof(TelemetryPacket));
+#endif
+        
+        char json[256];
+        snprintf(json, sizeof(json),
+            "{\"t\":%.1f,\"h\":%.1f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"gas\":%d,\"water\":%d,\"danger\":%d}",
+            currentTelemetry.temperature, currentTelemetry.humidity,
+            currentTelemetry.ax, currentTelemetry.ay, currentTelemetry.az,
+            currentTelemetry.gx, currentTelemetry.gy, currentTelemetry.gz,
+            currentTelemetry.gasRaw, currentTelemetry.waterRaw,
+            currentTelemetry.dangerState
+        );
+        Serial.println(json);
+
     }
 }
