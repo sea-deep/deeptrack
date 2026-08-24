@@ -1,0 +1,7 @@
+<svg width="60" height="60" xmlns="http://www.w3.org/2000/svg">
+  <rect width="60" height="60" fill="purple" rx="5" ry="5"/>
+  <rect width="20" height="10" x="20" y="25" fill="black"/>
+  <circle cx="25" cy="30" r="3" fill="#666"/>
+  <circle cx="35" cy="30" r="3" fill="#666"/>
+  <text x="30" y="15" fill="white" font-size="8" text-anchor="middle" font-family="sans-serif">VL53L0X</text>
+</svg>

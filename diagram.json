@@ -86,10 +86,10 @@
     {
       "type": "wokwi-text",
       "id": "front_label",
-      "top": -401,
-      "left": 380,
+      "top": -390,
+      "left": 350,
       "attrs": {
-        "text": "HC-SR04 MOUNTED ON SG90 SCAN SERVO - ROTATES TO SCAN LEFT/RIGHT"
+        "text": "HC-SR04 FIXED FORWARD SENSOR (TRIG=19, ECHO=18)"
       }
     },
     {
@@ -161,24 +161,6 @@
       }
     },
     {
-      "type": "wokwi-potentiometer",
-      "id": "tof_sim",
-      "top": -344,
-      "left": 226,
-      "attrs": {
-        "value": "512"
-      }
-    },
-    {
-      "type": "wokwi-text",
-      "id": "tof_label",
-      "top": -290,
-      "left": 113,
-      "attrs": {
-        "text": "VL53L0X SIM: POT GPIO39 | REAL SENSOR: I2C GPIO21 / GPIO22"
-      }
-    },
-    {
       "type": "wokwi-servo",
       "id": "scan_servo",
       "top": -331,
@@ -190,10 +172,10 @@
     {
       "type": "wokwi-text",
       "id": "servo_label",
-      "top": -401,
-      "left": 620,
+      "top": -390,
+      "left": 600,
       "attrs": {
-        "text": "SG90 SCANNING SERVO - GPIO13 - CARRIES THE HC-SR04"
+        "text": "SG90 SCANNING SERVO (GPIO13)"
       }
     },
     {
@@ -290,100 +272,6 @@
     },
     {
       "type": "wokwi-text",
-      "id": "driver_label",
-      "top": 61,
-      "left": 189,
-      "attrs": {
-        "text": "4WD MOTOR OUTPUTS - LEDS STAND IN FOR TB6612 + DC MOTORS"
-      }
-    },
-    {
-      "type": "wokwi-led",
-      "id": "motor_front_left",
-      "top": 115,
-      "left": 270,
-      "attrs": {
-        "color": "green",
-        "label": "FRONT LEFT"
-      }
-    },
-    {
-      "type": "wokwi-led",
-      "id": "motor_front_right",
-      "top": 115,
-      "left": 411,
-      "attrs": {
-        "color": "blue",
-        "label": "FRONT RIGHT"
-      }
-    },
-    {
-      "type": "wokwi-led",
-      "id": "motor_rear_left",
-      "top": 239,
-      "left": 270,
-      "attrs": {
-        "color": "green",
-        "label": "REAR LEFT"
-      }
-    },
-    {
-      "type": "wokwi-led",
-      "id": "motor_rear_right",
-      "top": 239,
-      "left": 411,
-      "attrs": {
-        "color": "blue",
-        "label": "REAR RIGHT"
-      }
-    },
-    {
-      "type": "wokwi-resistor",
-      "id": "motor_fl_resistor",
-      "top": 154,
-      "left": 189,
-      "attrs": {
-        "value": "220"
-      }
-    },
-    {
-      "type": "wokwi-resistor",
-      "id": "motor_fr_resistor",
-      "top": 154,
-      "left": 456,
-      "attrs": {
-        "value": "220"
-      }
-    },
-    {
-      "type": "wokwi-resistor",
-      "id": "motor_rl_resistor",
-      "top": 279,
-      "left": 189,
-      "attrs": {
-        "value": "220"
-      }
-    },
-    {
-      "type": "wokwi-resistor",
-      "id": "motor_rr_resistor",
-      "top": 279,
-      "left": 456,
-      "attrs": {
-        "value": "220"
-      }
-    },
-    {
-      "type": "wokwi-text",
-      "id": "motor_pin_label",
-      "top": 347,
-      "left": 174,
-      "attrs": {
-        "text": "LEFT PWM GPIO25 | RIGHT PWM GPIO14 | REAL MOTORS REQUIRE A DRIVER"
-      }
-    },
-    {
-      "type": "wokwi-text",
       "id": "powerbank_label",
       "top": 413,
       "left": 134,
@@ -417,86 +305,682 @@
       "attrs": {
         "text": "SAFETY: HC-SR04 ECHO + MQ ANALOG OUTPUT USE 10k / 15k DIVIDERS"
       }
+    },
+    {
+      "type": "chip-vl53l0x",
+      "id": "tof",
+      "top": -344,
+      "left": 226,
+      "attrs": {
+        "distance": "500"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "tof_label",
+      "top": -390,
+      "left": 100,
+      "attrs": {
+        "text": "VL53L0X ToF SENSOR (ON SERVO) - I2C (21, 22)"
+      }
+    },
+    {
+      "type": "chip-tb6612fng",
+      "id": "driver",
+      "top": 180,
+      "left": 350,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-text",
+      "id": "driver_label",
+      "top": 130,
+      "left": 240,
+      "attrs": {
+        "text": "TB6612FNG MOTOR DRIVER - ChA: LEFT (25,16,17) | ChB: RIGHT (14,33,2) | STBY: 5"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "tt_motor_fl",
+      "top": 140,
+      "left": 180,
+      "attrs": {
+        "color": "yellow",
+        "label": "TT MOTOR FL (LEFT)"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "tt_motor_rl",
+      "top": 240,
+      "left": 180,
+      "attrs": {
+        "color": "yellow",
+        "label": "TT MOTOR RL (LEFT)"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "tt_motor_fr",
+      "top": 140,
+      "left": 550,
+      "attrs": {
+        "color": "cyan",
+        "label": "TT MOTOR FR (RIGHT)"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "tt_motor_rr",
+      "top": 240,
+      "left": 550,
+      "attrs": {
+        "color": "cyan",
+        "label": "TT MOTOR RR (RIGHT)"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "tt_motors_label",
+      "top": 320,
+      "left": 200,
+      "attrs": {
+        "text": "4x TT DC MOTORS - LEFT PAIR WIRED IN PARALLEL TO AO1/AO2 | RIGHT PAIR TO BO1/BO2"
+      }
     }
   ],
   "connections": [
-    ["esp:TX", "$serialMonitor:RX", "", []],
-    ["esp:RX", "$serialMonitor:TX", "", []],
-
-    ["dht:VCC", "esp:3V3", "red", ["h36", "v75"]],
-    ["dht:GND", "esp:GND.1", "black", ["h42", "v120"]],
-    ["dht:SDA", "esp:23", "green", ["h55"]],
-    ["dht_pullup:1", "esp:3V3", "red", ["v-18"]],
-    ["dht_pullup:2", "dht:SDA", "green", ["h-22"]],
-
-    ["gas:VCC", "esp:3V3", "red", ["h25", "v190"]],
-    ["gas:GND", "esp:GND.1", "black", ["h30", "v95"]],
-    ["gas:SIG", "esp:34", "orange", ["h35", "v120"]],
-
-    ["front:VCC", "esp:5V", "red", ["h700", "v-260"]],
-    ["front:GND", "esp:GND.1", "black", ["h705", "v-230"]],
-    ["front:TRIG", "esp:19", "cyan", ["h-680"]],
-    ["front:ECHO", "echo_r_upper:1", "yellow", ["h-680", "v420"]],
-    ["echo_r_upper:2", "esp:18", "yellow", ["h16"]],
-    ["echo_r_upper:2", "echo_r_lower:1", "yellow", ["h9", "v22"]],
-    ["echo_r_lower:2", "esp:GND.2", "black", ["v20"]],
-
-    ["front:VCC", "scan_servo:V+", "red", ["v10", "h150"]],
-
-    ["imu:VCC", "esp:3V3", "red", ["h29", "v-100"]],
-    ["imu:GND", "esp:GND.2", "black", ["h34", "v-55"]],
-    ["imu:SDA", "esp:21", "blue", ["h56"]],
-    ["imu:SCL", "esp:22", "purple", ["h72"]],
-
-    ["encoder_left:VCC", "esp:3V3", "red", ["h22", "v-108"]],
-    ["encoder_left:GND", "esp:GND.2", "black", ["h33", "v-90"]],
-    ["encoder_left:CLK", "esp:32", "green", ["h49"]],
-
-    ["encoder_right:VCC", "esp:3V3", "red", ["h21", "v-100"]],
-    ["encoder_right:GND", "esp:GND.2", "black", ["h29", "v-73"]],
-    ["encoder_right:CLK", "esp:35", "green", ["h42"]],
-    ["encoder_right_pullup:1", "esp:3V3", "red", ["v-26"]],
-    ["encoder_right_pullup:2", "encoder_right:CLK", "green", ["h-26"]],
-
-    ["tof_sim:VCC", "esp:3V3", "red", ["v24", "h-72"]],
-    ["tof_sim:GND", "esp:GND.1", "black", ["v30", "h-60"]],
-    ["tof_sim:SIG", "esp:VN", "orange", ["v39", "h-42"]],
-
-    ["water_sim:VCC", "esp:3V3", "red", ["v36", "h-118"]],
-    ["water_sim:GND", "esp:GND.2", "black", ["v47", "h-129"]],
-    ["water_sim:SIG", "esp:VP", "cyan", ["v59", "h-140"]],
-
-    ["scan_servo:V+", "esp:5V", "red", ["v44", "h-61"]],
-    ["scan_servo:GND", "esp:GND.1", "black", ["v57", "h-71"]],
-    ["scan_servo:PWM", "esp:13", "purple", ["v70", "h-81"]],
-
-    ["buzzer:1", "esp:GND.2", "black", ["v33", "h-68"]],
-    ["buzzer:2", "buzzer_resistor:1", "orange", ["v21"]],
-    ["buzzer_resistor:2", "esp:4", "orange", ["h-32"]],
-
-    ["status_red:A", "status_red_resistor:1", "red", ["v-15"]],
-    ["status_red_resistor:2", "esp:26", "red", ["h-40", "v-20"]],
-    ["status_red:C", "esp:GND.2", "black", ["v40", "h-90"]],
-
-    ["status_green:A", "status_green_resistor:1", "green", ["v-15"]],
-    ["status_green_resistor:2", "esp:27", "green", ["h-40", "v-20"]],
-    ["status_green:C", "esp:GND.2", "black", ["v40", "h-190"]],
-
-    ["esp:25", "motor_fl_resistor:1", "green", ["h55", "v45"]],
-    ["motor_fl_resistor:2", "motor_front_left:A", "green", ["h16"]],
-    ["motor_front_left:C", "esp:GND.2", "black", ["v31", "h-91"]],
-
-    ["esp:25", "motor_rl_resistor:1", "green", ["h63", "v145"]],
-    ["motor_rl_resistor:2", "motor_rear_left:A", "green", ["h16"]],
-    ["motor_rear_left:C", "esp:GND.2", "black", ["v28", "h-99"]],
-
-    ["esp:14", "motor_fr_resistor:1", "blue", ["h89", "v64"]],
-    ["motor_fr_resistor:2", "motor_front_right:A", "blue", ["h-17"]],
-    ["motor_front_right:C", "esp:GND.2", "black", ["v42", "h-135"]],
-
-    ["esp:14", "motor_rr_resistor:1", "blue", ["h97", "v164"]],
-    ["motor_rr_resistor:2", "motor_rear_right:A", "blue", ["h-17"]],
-    ["motor_rear_right:C", "esp:GND.2", "black", ["v34", "h-144"]]
+    [
+      "esp:TX",
+      "$serialMonitor:RX",
+      "",
+      []
+    ],
+    [
+      "esp:RX",
+      "$serialMonitor:TX",
+      "",
+      []
+    ],
+    [
+      "dht:VCC",
+      "esp:3V3",
+      "red",
+      [
+        "h36",
+        "v75"
+      ]
+    ],
+    [
+      "dht:GND",
+      "esp:GND.1",
+      "black",
+      [
+        "h42",
+        "v120"
+      ]
+    ],
+    [
+      "dht:SDA",
+      "esp:23",
+      "green",
+      [
+        "h55"
+      ]
+    ],
+    [
+      "dht_pullup:1",
+      "esp:3V3",
+      "red",
+      [
+        "v-18"
+      ]
+    ],
+    [
+      "dht_pullup:2",
+      "dht:SDA",
+      "green",
+      [
+        "h-22"
+      ]
+    ],
+    [
+      "gas:VCC",
+      "esp:3V3",
+      "red",
+      [
+        "h25",
+        "v190"
+      ]
+    ],
+    [
+      "gas:GND",
+      "esp:GND.1",
+      "black",
+      [
+        "h30",
+        "v95"
+      ]
+    ],
+    [
+      "gas:SIG",
+      "esp:34",
+      "orange",
+      [
+        "h35",
+        "v120"
+      ]
+    ],
+    [
+      "front:VCC",
+      "esp:5V",
+      "red",
+      [
+        "h700",
+        "v-260"
+      ]
+    ],
+    [
+      "front:GND",
+      "esp:GND.1",
+      "black",
+      [
+        "h705",
+        "v-230"
+      ]
+    ],
+    [
+      "front:TRIG",
+      "esp:19",
+      "cyan",
+      [
+        "h-680"
+      ]
+    ],
+    [
+      "front:ECHO",
+      "echo_r_upper:1",
+      "yellow",
+      [
+        "h-680",
+        "v420"
+      ]
+    ],
+    [
+      "echo_r_upper:2",
+      "esp:18",
+      "yellow",
+      [
+        "h16"
+      ]
+    ],
+    [
+      "echo_r_upper:2",
+      "echo_r_lower:1",
+      "yellow",
+      [
+        "h9",
+        "v22"
+      ]
+    ],
+    [
+      "echo_r_lower:2",
+      "esp:GND.2",
+      "black",
+      [
+        "v20"
+      ]
+    ],
+    [
+      "front:VCC",
+      "scan_servo:V+",
+      "red",
+      [
+        "v10",
+        "h150"
+      ]
+    ],
+    [
+      "imu:VCC",
+      "esp:3V3",
+      "red",
+      [
+        "h29",
+        "v-100"
+      ]
+    ],
+    [
+      "imu:GND",
+      "esp:GND.2",
+      "black",
+      [
+        "h34",
+        "v-55"
+      ]
+    ],
+    [
+      "imu:SDA",
+      "esp:21",
+      "blue",
+      [
+        "h56"
+      ]
+    ],
+    [
+      "imu:SCL",
+      "esp:22",
+      "purple",
+      [
+        "h72"
+      ]
+    ],
+    [
+      "encoder_left:VCC",
+      "esp:3V3",
+      "red",
+      [
+        "h22",
+        "v-108"
+      ]
+    ],
+    [
+      "encoder_left:GND",
+      "esp:GND.2",
+      "black",
+      [
+        "h33",
+        "v-90"
+      ]
+    ],
+    [
+      "encoder_left:CLK",
+      "esp:32",
+      "green",
+      [
+        "h49"
+      ]
+    ],
+    [
+      "encoder_right:VCC",
+      "esp:3V3",
+      "red",
+      [
+        "h21",
+        "v-100"
+      ]
+    ],
+    [
+      "encoder_right:GND",
+      "esp:GND.2",
+      "black",
+      [
+        "h29",
+        "v-73"
+      ]
+    ],
+    [
+      "encoder_right:CLK",
+      "esp:35",
+      "green",
+      [
+        "h42"
+      ]
+    ],
+    [
+      "encoder_right_pullup:1",
+      "esp:3V3",
+      "red",
+      [
+        "v-26"
+      ]
+    ],
+    [
+      "encoder_right_pullup:2",
+      "encoder_right:CLK",
+      "green",
+      [
+        "h-26"
+      ]
+    ],
+    [
+      "water_sim:VCC",
+      "esp:3V3",
+      "red",
+      [
+        "v36",
+        "h-118"
+      ]
+    ],
+    [
+      "water_sim:GND",
+      "esp:GND.2",
+      "black",
+      [
+        "v47",
+        "h-129"
+      ]
+    ],
+    [
+      "water_sim:SIG",
+      "esp:VP",
+      "cyan",
+      [
+        "v59",
+        "h-140"
+      ]
+    ],
+    [
+      "scan_servo:V+",
+      "esp:5V",
+      "red",
+      [
+        "v44",
+        "h-61"
+      ]
+    ],
+    [
+      "scan_servo:GND",
+      "esp:GND.1",
+      "black",
+      [
+        "v57",
+        "h-71"
+      ]
+    ],
+    [
+      "scan_servo:PWM",
+      "esp:13",
+      "purple",
+      [
+        "v70",
+        "h-81"
+      ]
+    ],
+    [
+      "buzzer:1",
+      "esp:GND.2",
+      "black",
+      [
+        "v33",
+        "h-68"
+      ]
+    ],
+    [
+      "buzzer:2",
+      "buzzer_resistor:1",
+      "orange",
+      [
+        "v21"
+      ]
+    ],
+    [
+      "buzzer_resistor:2",
+      "esp:4",
+      "orange",
+      [
+        "h-32"
+      ]
+    ],
+    [
+      "status_red:A",
+      "status_red_resistor:1",
+      "red",
+      [
+        "v-15"
+      ]
+    ],
+    [
+      "status_red_resistor:2",
+      "esp:26",
+      "red",
+      [
+        "h-40",
+        "v-20"
+      ]
+    ],
+    [
+      "status_red:C",
+      "esp:GND.2",
+      "black",
+      [
+        "v40",
+        "h-90"
+      ]
+    ],
+    [
+      "status_green:A",
+      "status_green_resistor:1",
+      "green",
+      [
+        "v-15"
+      ]
+    ],
+    [
+      "status_green_resistor:2",
+      "esp:27",
+      "green",
+      [
+        "h-40",
+        "v-20"
+      ]
+    ],
+    [
+      "status_green:C",
+      "esp:GND.2",
+      "black",
+      [
+        "v40",
+        "h-190"
+      ]
+    ],
+    [
+      "tof:VCC",
+      "esp:3V3",
+      "red",
+      [
+        "v24",
+        "h-72"
+      ]
+    ],
+    [
+      "tof:GND",
+      "esp:GND.1",
+      "black",
+      [
+        "v30",
+        "h-60"
+      ]
+    ],
+    [
+      "tof:SDA",
+      "esp:21",
+      "blue",
+      [
+        "v39",
+        "h-42"
+      ]
+    ],
+    [
+      "tof:SCL",
+      "esp:22",
+      "purple",
+      [
+        "v48",
+        "h-54"
+      ]
+    ],
+    [
+      "driver:VM",
+      "esp:5V",
+      "red",
+      [
+        "v-30",
+        "h-80"
+      ]
+    ],
+    [
+      "driver:VCC",
+      "esp:3V3",
+      "red",
+      [
+        "v-20",
+        "h-80"
+      ]
+    ],
+    [
+      "driver:GND",
+      "esp:GND.2",
+      "black",
+      [
+        "v10",
+        "h-80"
+      ]
+    ],
+    [
+      "driver:GND2",
+      "esp:GND.2",
+      "black",
+      [
+        "v20",
+        "h-80"
+      ]
+    ],
+    [
+      "driver:STBY",
+      "esp:5",
+      "purple",
+      [
+        "v-10",
+        "h80"
+      ]
+    ],
+    [
+      "driver:PWMA",
+      "esp:25",
+      "green",
+      [
+        "v-40",
+        "h80"
+      ]
+    ],
+    [
+      "driver:AIN1",
+      "esp:16",
+      "blue",
+      [
+        "v-50",
+        "h80"
+      ]
+    ],
+    [
+      "driver:AIN2",
+      "esp:17",
+      "orange",
+      [
+        "v-60",
+        "h80"
+      ]
+    ],
+    [
+      "driver:PWMB",
+      "esp:14",
+      "green",
+      [
+        "v40",
+        "h80"
+      ]
+    ],
+    [
+      "driver:BIN1",
+      "esp:33",
+      "blue",
+      [
+        "v50",
+        "h80"
+      ]
+    ],
+    [
+      "driver:BIN2",
+      "esp:2",
+      "orange",
+      [
+        "v60",
+        "h80"
+      ]
+    ],
+    [
+      "tt_motor_fl:A",
+      "driver:AO1",
+      "yellow",
+      [
+        "h-20",
+        "v40"
+      ]
+    ],
+    [
+      "tt_motor_fl:C",
+      "driver:AO2",
+      "black",
+      [
+        "h-30",
+        "v60"
+      ]
+    ],
+    [
+      "tt_motor_rl:A",
+      "driver:AO1",
+      "yellow",
+      [
+        "h-20",
+        "v-40"
+      ]
+    ],
+    [
+      "tt_motor_rl:C",
+      "driver:AO2",
+      "black",
+      [
+        "h-30",
+        "v-20"
+      ]
+    ],
+    [
+      "tt_motor_fr:A",
+      "driver:BO1",
+      "cyan",
+      [
+        "h20",
+        "v40"
+      ]
+    ],
+    [
+      "tt_motor_fr:C",
+      "driver:BO2",
+      "black",
+      [
+        "h30",
+        "v60"
+      ]
+    ],
+    [
+      "tt_motor_rr:A",
+      "driver:BO1",
+      "cyan",
+      [
+        "h20",
+        "v-40"
+      ]
+    ],
+    [
+      "tt_motor_rr:C",
+      "driver:BO2",
+      "black",
+      [
+        "h30",
+        "v-20"
+      ]
+    ]
   ],
   "dependencies": {}
 }
