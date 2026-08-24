@@ -1,11 +1,27 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <LiquidCrystal_I2C.h>
 
 #define USE_ESP_NOW 0
 
 #include <PubSubClient.h>
 #include "telemetry_packet.h"
+
+// ---------- LCD ----------
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+uint32_t lastDataTime = 0;
+int lcdPage = 0;
+#define NUM_PAGES 3
+uint32_t lastPageChange = 0;
+
+// Custom Icons
+byte thermIcon[8] = { B00100, B01010, B01010, B01110, B01110, B11111, B11111, B01110 };
+byte signalIcon[8] = { B00000, B10000, B10100, B10100, B10101, B10101, B10101, B10101 };
+byte warnIcon[8] = { B00000, B00100, B01010, B11011, B11011, B11011, B11111, B00000 };
+
+TelemetryPacket latestTel = {0};
+
 
 #define WIFI_SSID "Wokwi-GUEST"
 #define WIFI_PASS ""
@@ -18,6 +34,62 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
 uint8_t roverAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+
+void updateLCD() {
+  lcd.clear();
+  
+  if (millis() - lastDataTime > 3000) {
+      lcd.setCursor(0, 0);
+      lcd.write(2); // warning
+      lcd.print(" LINK LOST! ");
+      lcd.write(2);
+      lcd.setCursor(0, 1);
+      lcd.print("No data >3s");
+      return;
+  }
+  
+  if (latestTel.dangerState == 1) {
+      lcd.setCursor(0, 0);
+      lcd.write(2); // warning icon
+      lcd.print(" DANGER!!  ");
+      lcd.write(2);
+      lcd.setCursor(0, 1);
+      lcd.print("EMERGENCY STOP");
+      return;
+  }
+  
+  switch (lcdPage) {
+    case 0: { // ENV
+      char e1[17], e2[17];
+      snprintf(e1, sizeof(e1), " T:%.1fC H:%.1f%%", latestTel.temperature, latestTel.humidity);
+      snprintf(e2, sizeof(e2), " Gas:%d W:%d", latestTel.gasRaw, latestTel.waterRaw);
+      lcd.setCursor(0, 0); lcd.write(0); lcd.print(e1);
+      lcd.setCursor(0, 1); lcd.print(e2);
+      break;
+    }
+
+    case 1: { // NAV
+      char n1[17], n2[17];
+      snprintf(n1, sizeof(n1), " P:%.1f R:%.1f", 
+        atan2(-latestTel.ax, sqrt(latestTel.ay * latestTel.ay + latestTel.az * latestTel.az)) * 180.0 / 3.14159265,
+        atan2(latestTel.ay, latestTel.az) * 180.0 / 3.14159265);
+      snprintf(n2, sizeof(n2), " GYR:%d", (int)latestTel.gz);
+      lcd.setCursor(0, 0); lcd.print(n1);
+      lcd.setCursor(0, 1); lcd.print(n2);
+      break;
+    }
+
+    case 2: { // SYS
+      char s1[17], s2[17];
+      snprintf(s1, sizeof(s1), " MQTT:%s", mqttClient.connected() ? "ON" : "OFF");
+      snprintf(s2, sizeof(s2), " WiFi:%s", WiFi.status() == WL_CONNECTED ? "ON" : "OFF");
+      lcd.setCursor(0, 0); lcd.print(s1);
+      lcd.setCursor(0, 1); lcd.write(1); lcd.print(s2);
+      break;
+    }
+  }
+}
 
 void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     if (len == sizeof(TelemetryPacket)) {
@@ -87,6 +159,18 @@ void reconnectMqtt() {
 void setup() {
     Serial.begin(115200);
     
+    // LCD init
+    lcd.init();
+    lcd.backlight();
+    lcd.createChar(0, thermIcon);
+    lcd.createChar(1, signalIcon);
+    lcd.createChar(2, warnIcon);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("DEEPTRACK GTWRY");
+    lcd.setCursor(0, 1);
+    lcd.print("Waiting link...");
+    
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     
@@ -120,6 +204,16 @@ void loop() {
     }
     
 
+
+    // --- Auto-cycle LCD pages every 3s (unless DANGER) ---
+    if (millis() - lastPageChange >= 3000) {
+        lastPageChange = millis();
+        if (latestTel.dangerState != 1) {
+            lcdPage = (lcdPage + 1) % NUM_PAGES;
+            updateLCD();
+        }
+    }
+
     // Check serial for commands (direct typing) or telemetry (from Wokwi Bridge)
 
     if (Serial.available()) {
@@ -148,15 +242,6 @@ void loop() {
                 } else {
                      if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_TELEMETRY, jsonSub.c_str());
                 }
-            }
-        }
-    }
-        } else if (line.startsWith("{")) {
-            // It's telemetry from Wokwi Serial Bridge!
-            if (line.indexOf("\"type\":\"scan\"") > 0) {
-                 if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_SCAN, line.c_str());
-            } else {
-                 if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_TELEMETRY, line.c_str());
             }
         }
     }
