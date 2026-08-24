@@ -24,7 +24,7 @@ All audit fixes are baked in (separate 5V bus, MQ-4 voltage divider, decoupling 
 
 | # | What to Search | Spec | Qty | ₹ Est. | Why |
 |---|---|---|---|---|---|
-| 6 | TB6612FNG Dual Motor Driver Module | Breakout board (NOT bare chip). Pins: VM, VCC, GND, STBY, AIN1, AIN2, PWMA, AO1, AO2, BIN1, BIN2, PWMB, BO1, BO2 | 1 | 200–350 | Drives both left-pair and right-pair motors. VM rated up to 13.5V (we use 5V) |
+| 6 | TB6612FNG Dual Motor Driver Module | Breakout board (NOT bare chip). Pins: VM, VCC, GND, STBY, AIN1, AIN2, PWMA, AO1, AO2, BIN1, BIN2, PWMB, BO1, BO2 | 2 | 400–700 | One H-bridge channel per motor. Two modules provide 4 independent output channels, avoiding two TT motors sharing one channel |
 
 ### Sensors
 
@@ -54,8 +54,8 @@ All audit fixes are baked in (separate 5V bus, MQ-4 voltage divider, decoupling 
 | 18 | 10kΩ Resistor ¼W | 10kΩ | 4 | 2–5 each | 1× DHT22 pull-up (skip if 3-pin module), 1× HC-SR04 ECHO divider upper, 1× MQ-4 AO divider upper, 1× right encoder pull-up |
 | 19 | 15kΩ Resistor ¼W | 15kΩ | 2 | 2–5 each | 1× HC-SR04 ECHO divider lower, 1× MQ-4 AO divider lower |
 | 20 | 220Ω Resistor ¼W | 220Ω | 3 | 2–5 each | 1× buzzer, 1× red LED, 1× green LED |
-| 21 | 470µF Electrolytic Capacitor | 470µF 16V (or 25V) | 1 | 5–10 | Across main 5V bus — absorbs motor current spikes |
-| 22 | 100nF Ceramic Capacitor | 0.1µF (code "104") | 2 | 2–5 each | 1× across ESP32 3V3/GND, 1× across TB6612FNG VCC/GND — filters high-freq noise |
+| 21 | 470µF Electrolytic Capacitor | 470µF 16V (or 25V) | 2 | 5–10 | One near each TB6612 VM/GND input to absorb motor startup/current spikes |
+| 22 | 100nF Ceramic Capacitor | 0.1µF (code "104") | 3 | 2–5 each | 1× across ESP32 3V3/GND, 1× across each TB6612 VCC/GND |
 
 > **Tip:** Buy a resistor assortment kit (₹80–120) and a capacitor assortment kit (₹60–100) instead of individual pieces. You'll have spares for mistakes.
 
@@ -115,10 +115,10 @@ On the laptop:
 
 | Section | ₹ Estimate |
 |---|---|
-| Rover (ESP32 + Chassis + Sensors + Driver + Actuators + Passives + Caps) | 2,200 – 3,500 |
-| Gateway (ESP32 + LCD + LEDs + Resistors + Cable) | 600 – 950 |
-| Wiring Supplies (Breadboards + Wires + Tape) | 350 – 550 |
-| **TOTAL** | **3,150 – 5,000** |
+| Rover (ESP32 + Chassis + Sensors + Driver + Actuators + Passives + Caps) | 2,410 – 3,870 |
+| Gateway (ESP32 + LCD + LEDs + Resistors + Cable) | 600–950 |
+| Wiring Supplies (Breadboards + Wires + Tape) | 350–550 |
+| **TOTAL** | **3,360 – 5,370** |
 
 > If you already own a 10000mAh power bank, subtract ₹500–900.
 
@@ -126,11 +126,11 @@ On the laptop:
 
 ## PRINTABLE CHECKLIST
 
-```
+```text
 ROVER:
 [ ] ESP32 DevKit V1 ×1
 [ ] 4WD Chassis Kit (4× TT motors, 4× wheels, acrylic frame) ×1
-[ ] TB6612FNG Motor Driver Module ×1
+[ ] TB6612FNG Motor Driver Module ×2
 [ ] DHT22 Sensor Module (3-pin preferred) ×1
 [ ] MQ-4 Gas Sensor Module ×1
 [ ] HC-SR04 Ultrasonic Sensor ×1
@@ -145,8 +145,8 @@ ROVER:
 [ ] 10kΩ Resistors ×4
 [ ] 15kΩ Resistors ×2
 [ ] 220Ω Resistors ×3
-[ ] 470µF Electrolytic Capacitor ×1
-[ ] 100nF Ceramic Capacitors ×2
+[ ] 470µF Electrolytic Capacitor ×2
+[ ] 100nF Ceramic Capacitors ×3
 [ ] 10000mAh Power Bank ×1
 [ ] Short USB Cable (30cm) ×1
 [ ] USB-A Breakout Board ×1
