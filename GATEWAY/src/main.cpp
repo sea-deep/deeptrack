@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <LiquidCrystal_I2C.h>
+#include <ArduinoJson.h>
 
 #define USE_ESP_NOW 0
 
@@ -94,6 +95,8 @@ void updateLCD() {
 void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     if (len == sizeof(TelemetryPacket)) {
         TelemetryPacket *pkt = (TelemetryPacket*)incomingData;
+        memcpy(&latestTel, pkt, sizeof(TelemetryPacket));
+        lastDataTime = millis();
         char json[256];
         snprintf(json, sizeof(json),
             "{\"t\":%.1f,\"h\":%.1f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"gas\":%d,\"water\":%d,\"danger\":%d}",
@@ -110,6 +113,7 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
         }
     } else if (len == sizeof(ScanPacket)) {
         ScanPacket *pkt = (ScanPacket*)incomingData;
+        lastDataTime = millis();
         char json[128];
         snprintf(json, sizeof(json),
             "{\"type\":\"scan\",\"seq\":%d,\"angle_deg\":%d,\"distance_mm\":%d,\"valid\":%s,\"timestamp_ms\":%d}",
@@ -232,15 +236,37 @@ void loop() {
 #endif
             }
         } else {
+
             // Extract JSON telemetry from Wokwi Serial Bridge
             int start = line.indexOf('{');
             int end = line.lastIndexOf('}');
             if (start >= 0 && end > start) {
                 String jsonSub = line.substring(start, end + 1);
+                
+                // Keep the LCD alive
+                lastDataTime = millis();
+                
                 if (jsonSub.indexOf("\"type\":\"scan\"") > 0) {
                      if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_SCAN, jsonSub.c_str());
                 } else {
                      if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_TELEMETRY, jsonSub.c_str());
+                     
+                     // Parse to update LCD
+                     JsonDocument doc;
+                     DeserializationError error = deserializeJson(doc, jsonSub);
+                     if (!error) {
+                         latestTel.temperature = doc["t"] | 0.0f;
+                         latestTel.humidity = doc["h"] | 0.0f;
+                         latestTel.ax = doc["ax"] | 0.0f;
+                         latestTel.ay = doc["ay"] | 0.0f;
+                         latestTel.az = doc["az"] | 1.0f;
+                         latestTel.gx = doc["gx"] | 0.0f;
+                         latestTel.gy = doc["gy"] | 0.0f;
+                         latestTel.gz = doc["gz"] | 0.0f;
+                         latestTel.gasRaw = doc["gas"] | 0;
+                         latestTel.waterRaw = doc["water"] | 0;
+                         latestTel.dangerState = doc["danger"] | 0;
+                     }
                 }
             }
         }
