@@ -163,6 +163,10 @@ void reconnectMqtt() {
 void setup() {
     Serial.begin(115200);
     
+        pinMode(26, OUTPUT); // RED
+    pinMode(27, OUTPUT); // GREEN
+    pinMode(25, OUTPUT); // YELLOW
+    
     // LCD init
     lcd.init();
     lcd.backlight();
@@ -221,6 +225,7 @@ void loop() {
     // Check serial for commands (direct typing) or telemetry (from Wokwi Bridge)
 
     if (Serial.available()) {
+        digitalWrite(25, !digitalRead(25)); // Toggle YELLOW LED on serial RX
         String line = Serial.readStringUntil('\n');
         
         // Check for commands (direct typing)
@@ -245,6 +250,7 @@ void loop() {
                 
                 // Keep the LCD alive
                 lastDataTime = millis();
+                Serial.println("RX: " + jsonSub);
                 
                 if (jsonSub.indexOf("\"type\":\"scan\"") > 0) {
                      if (mqttClient.connected()) mqttClient.publish(MQTT_TOPIC_SCAN, jsonSub.c_str());
@@ -255,6 +261,9 @@ void loop() {
                      JsonDocument doc;
                      DeserializationError error = deserializeJson(doc, jsonSub);
                      if (!error) {
+                         digitalWrite(27, HIGH); // GREEN ON
+                         digitalWrite(26, LOW); // RED OFF
+                         latestTel.temperature = doc["t"] | 0.0f;
                          latestTel.temperature = doc["t"] | 0.0f;
                          latestTel.humidity = doc["h"] | 0.0f;
                          latestTel.ax = doc["ax"] | 0.0f;
