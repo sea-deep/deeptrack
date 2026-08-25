@@ -10,12 +10,18 @@
   import Navbar from '$lib/components/Navbar.svelte';
   import Footer from '$lib/components/Footer.svelte';
   import { onMount } from 'svelte';
-  import { supabase } from '$lib/supabaseClient.js';
+  import { auth } from '$lib/stores/auth.svelte.js';
   import { goto } from '$app/navigation';
   import { initialTelemetry, initialScanPoints } from '$lib/mocks/telemetryMock.js';
   import { sendShared, receiveShared, m3TopLevelFadeThrough } from '$lib/utils/motion.js';
 
   // --- Shared App State ---
+  $effect(() => {
+    if (!auth.isLoading && !auth.user) {
+      goto('/auth');
+    }
+  });
+
   /** @type {'hardware' | 'demo' | null} */
   let missionMode = $state(null);
   let activeNavView = $state('console'); // 'console', 'maps', 'logs', 'hardware'
@@ -297,21 +303,6 @@
 
 
   onMount(() => {
-    // Auth Guard: Prevent kicking if OAuth is returning with a token in the hash
-    const isOAuthReturn = window.location.hash.includes('access_token');
-    
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session && !isOAuthReturn) {
-        goto('/auth');
-      }
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session && !window.location.hash.includes('access_token')) {
-        goto('/auth');
-      }
-    });
-
     window.addEventListener('keydown', handleKeydown);
     window.addEventListener('keyup', handleKeyup);
     window.addEventListener('blur', handleWindowBlur);
@@ -353,7 +344,6 @@
     }, 200);
 
     return () => {
-      subscription.unsubscribe();
       window.removeEventListener('keydown', handleKeydown);
       window.removeEventListener('keyup', handleKeyup);
       window.removeEventListener('blur', handleWindowBlur);
@@ -363,10 +353,18 @@
 </script>
 
 <svelte:head>
-  <title>DeepTrack Dashboard</title>
+  <title>DeepTrack · Console</title>
 </svelte:head>
 
 
+{#if auth.isLoading}
+  <div class="h-screen w-screen flex items-center justify-center bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)]">
+    <div class="flex flex-col items-center gap-3">
+      <span class="material-symbols-rounded animate-spin text-4xl text-[var(--md-sys-color-primary)]">progress_activity</span>
+      <p class="text-xs font-mono text-[var(--md-sys-color-on-surface-variant)]">Restoring operator session...</p>
+    </div>
+  </div>
+{:else if auth.user}
 {#if missionMode === null}
   <div class="min-h-screen flex flex-col bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)] select-none" in:m3TopLevelFadeThrough={{ duration: 400 }}>
     <Navbar active="dashboard" />
@@ -408,7 +406,7 @@
           <button
             type="button"
             class="text-[11px] font-semibold text-[var(--md-sys-color-error)] hover:underline flex items-center gap-1"
-            onclick={() => supabase.auth.signOut()}
+            onclick={() => auth.signOut()}
           >
             End Session
           </button>
@@ -733,4 +731,13 @@
 
 <SensorDetailModal isOpen={isModalOpen} sensor={activeModalData} onClose={() => { isModalOpen = false; selectedSensorKey = null; }} />
 
+{/if}
+
+{:else}
+  <div class="h-screen w-screen flex items-center justify-center bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)]">
+    <div class="flex flex-col items-center gap-3">
+      <span class="material-symbols-rounded animate-spin text-4xl text-[var(--md-sys-color-primary)]">progress_activity</span>
+      <p class="text-xs font-mono text-[var(--md-sys-color-on-surface-variant)]">Redirecting to authorization enclave...</p>
+    </div>
+  </div>
 {/if}

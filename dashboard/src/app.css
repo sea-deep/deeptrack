@@ -45,6 +45,10 @@
   --ui-color-on-warning: #ffffff;
   --ui-color-warning-container: #fef7e0;
   --ui-color-on-warning-container: #774100;
+
+  /* Inverse surface — used by tooltips */
+  --md-sys-color-inverse-surface: #00363d;
+  --md-sys-color-inverse-on-surface: #a6eeff;
 }
 
 :root[data-theme="dark"] {
@@ -85,6 +89,21 @@
   --ui-color-on-warning: #774100;
   --ui-color-warning-container: #b06000;
   --ui-color-on-warning-container: #fef7e0;
+
+  /* Inverse surface — dark values (inverse of dark = light surface) */
+  --md-sys-color-inverse-surface: #a6eeff;
+  --md-sys-color-inverse-on-surface: #001f25;
+}
+
+/* Respect user motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 body {
@@ -112,14 +131,76 @@ body {
   .ui-field label {
     @apply text-sm font-medium text-[var(--md-sys-color-on-surface)];
   }
-  .ui-field input {
-    @apply h-12 px-4 rounded-t-md bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface)] border-b border-[var(--md-sys-color-outline)] focus:outline-none focus:border-b-2 focus:border-[var(--md-sys-color-primary)] transition-all;
+
+  /* ── Shared base for all text-like controls ── */
+  .ui-field input:not([type="range"]),
+  .ui-field select,
+  .ui-field textarea {
+    min-height: 44px;
+    @apply w-full px-4 rounded-t-md bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface)] border-b border-[var(--md-sys-color-outline)] transition-all duration-150;
+    @apply focus:outline-none focus-visible:border-b-2 focus-visible:border-[var(--md-sys-color-primary)];
   }
-  .ui-field input::placeholder {
+  .ui-field input:not([type="range"]) {
+    @apply h-12;
+  }
+  .ui-field textarea {
+    @apply resize-y py-3 leading-relaxed;
+    min-height: 96px;
+  }
+  .ui-field select {
+    @apply h-12 pr-10 appearance-none cursor-pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'%3E%3Cpath fill='%236f797a' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+
+  /* Placeholder */
+  .ui-field input::placeholder,
+  .ui-field textarea::placeholder {
     @apply text-[var(--md-sys-color-on-surface-variant)] opacity-70;
   }
-  .ui-field input:disabled {
+
+  /* Disabled */
+  .ui-field input:disabled,
+  .ui-field select:disabled,
+  .ui-field textarea:disabled {
     @apply opacity-50 cursor-not-allowed;
+  }
+
+  /* Hover */
+  .ui-field input:not(:disabled):not([aria-invalid="true"]):hover,
+  .ui-field select:not(:disabled):not([aria-invalid="true"]):hover,
+  .ui-field textarea:not(:disabled):not([aria-invalid="true"]):hover {
+    @apply bg-[var(--md-sys-color-surface-variant)];
+  }
+
+  /* Error / invalid state */
+  .ui-field input[aria-invalid="true"],
+  .ui-field select[aria-invalid="true"],
+  .ui-field textarea[aria-invalid="true"] {
+    border-bottom-color: var(--md-sys-color-error);
+    border-bottom-width: 2px;
+  }
+  .ui-field input[aria-invalid="true"]:focus-visible,
+  .ui-field select[aria-invalid="true"]:focus-visible,
+  .ui-field textarea[aria-invalid="true"]:focus-visible {
+    border-bottom-color: var(--md-sys-color-error);
+  }
+
+  /* Chrome autofill — prevent the yellow/white rectangle from overriding our colors */
+  .ui-field input:-webkit-autofill,
+  .ui-field input:-webkit-autofill:hover,
+  .ui-field input:-webkit-autofill:focus,
+  .ui-field input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0px 1000px var(--md-sys-color-surface-container-highest) inset !important;
+    -webkit-text-fill-color: var(--md-sys-color-on-surface) !important;
+    caret-color: var(--md-sys-color-on-surface);
+    border-bottom-color: var(--md-sys-color-outline);
+    transition: background-color 99999s ease-in-out 0s; /* postpone autofill bg reset */
+  }
+  .ui-field input:-webkit-autofill:focus {
+    border-bottom-color: var(--md-sys-color-primary);
+    border-bottom-width: 2px;
   }
 
   .ui-card {

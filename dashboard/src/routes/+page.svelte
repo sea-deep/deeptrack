@@ -157,7 +157,7 @@
 </script>
 
 <svelte:head>
-  <title>DeepTrack — Subterranean Mine Rescue Rover System</title>
+  <title>DeepTrack</title>
 </svelte:head>
 
 <div class="min-h-screen flex flex-col bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)] select-none">

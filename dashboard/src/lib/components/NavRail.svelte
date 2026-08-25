@@ -3,7 +3,7 @@
   import { getTheme, toggleTheme } from '$lib/utils/theme.js';
   import { sendShared, receiveShared } from '$lib/utils/motion.js';
   import { onMount } from 'svelte';
-  import { supabase } from '$lib/supabaseClient.js';
+  import AccountPopover from './AccountPopover.svelte';
 
   let {
     activeView = 'console',
@@ -36,7 +36,7 @@
 </script>
 
 <aside
-  class="w-20 shrink-0 h-full bg-[var(--md-sys-color-surface-container)] border-r border-[var(--md-sys-color-outline-variant)] flex flex-col items-center justify-between py-5 z-40 select-none transition-colors duration-200"
+  class="w-20 shrink-0 h-full bg-[var(--md-sys-color-surface-container)] border-r border-[var(--md-sys-color-outline-variant)] flex flex-col items-center justify-between py-5 z-40 select-none transition-colors duration-200 overflow-visible"
   aria-label="Subterranean navigation rail"
 >
   <!-- Top Brand Mark & Destinations -->
@@ -44,10 +44,15 @@
     <!-- Brand Mark -->
     <a
       href="/"
-      class="w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm hover:scale-105 transition-transform duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] mb-6"
+      class="flex flex-col items-center justify-center gap-1 group no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] rounded-xl mb-5 text-center"
       title="DeepTrack Home"
     >
-      <RoverLogo size={40} />
+      <div class="w-11 h-11 rounded-2xl flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform duration-200">
+        <RoverLogo size={36} />
+      </div>
+      <span class="text-[11px] font-bold tracking-tight text-[var(--md-sys-color-on-surface)] leading-tight">
+        DeepTrack
+      </span>
     </a>
 
     <!-- Destinations Group -->
@@ -88,22 +93,8 @@
     </nav>
   </div>
 
-  <!-- Bottom Utilities: Status dot & Compact Circular Theme Toggle -->
-  <div class="flex flex-col items-center gap-4 w-full relative">
-    
-    <!-- Sign Out Button -->
-    <button
-      type="button"
-      class="w-10 h-10 rounded-full flex items-center justify-center text-[var(--md-sys-color-on-surface-variant)] hover:bg-[var(--md-sys-color-error-container)] hover:text-[var(--md-sys-color-on-error-container)] border border-[var(--md-sys-color-outline-variant)] hover:border-[var(--md-sys-color-error)] transition-all duration-200 active:scale-95 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] relative"
-      onclick={() => supabase.auth.signOut()}
-      title="Sign Out"
-      aria-label="Sign out"
-    >
-      <span class="material-symbols-rounded text-[22px]">logout</span>
-      <span class="absolute left-[52px] px-2.5 py-1 bg-[var(--md-sys-color-inverse-surface)] text-[var(--md-sys-color-inverse-on-surface)] text-xs font-medium rounded-lg shadow-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 whitespace-nowrap z-50">
-        Sign Out
-      </span>
-    </button>
+  <!-- Bottom Utilities: Status dot & Compact Circular Theme Toggle & Account Control -->
+  <div class="flex flex-col items-center gap-3.5 w-full">
     <!-- Link Status Indicator -->
     <div class="flex items-center justify-center w-8 h-8">
       <div
@@ -125,5 +116,8 @@
     >
       <span class="material-symbols-rounded text-[24px]">{currentTheme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
     </button>
+
+    <!-- Account Control Popover -->
+    <AccountPopover anchor="bottom-left" />
   </div>
 </aside>

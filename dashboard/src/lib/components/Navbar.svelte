@@ -2,24 +2,16 @@
   import RoverLogo from './RoverLogo.svelte';
   import { getTheme, toggleTheme } from '$lib/utils/theme.js';
   import { onMount } from 'svelte';
-  import { supabase } from '$lib/supabaseClient.js';
+  import AccountPopover from './AccountPopover.svelte';
 
   let { active = 'home' } = $props();
   let currentTheme = $state('dark');
-  let userSession = $state(null);
 
   function handleThemeToggle() {
     currentTheme = toggleTheme();
   }
 
   onMount(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      userSession = session;
-    });
-    supabase.auth.onAuthStateChange((_event, session) => {
-      userSession = session;
-    });
-
     currentTheme = getTheme();
     const handleThemeChange = (/** @type {any} */ e) => {
       currentTheme = e.detail?.theme || getTheme();
@@ -33,37 +25,21 @@
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
     <!-- Brand Lockup -->
     <a href="/" class="flex items-center gap-3 no-underline text-[var(--md-sys-color-on-surface)] group">
-      <RoverLogo size={36} class="transition-transform duration-300 group-hover:scale-105" />
-      <div>
-        <div class="font-bold text-lg tracking-tight leading-none flex items-center gap-2">
-          DeepTrack
-          <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] font-semibold">
-            v2.4
-          </span>
-        </div>
-        <div class="text-[11px] text-[var(--md-sys-color-on-surface-variant)] font-medium mt-0.5">
-          Subterranean Mine Rescue Rover
-        </div>
-      </div>
+      <RoverLogo size={40} class="transition-transform duration-300 group-hover:scale-105" />
+      <span class="font-bold text-xl md:text-2xl tracking-tight leading-none text-[var(--md-sys-color-on-surface)]">
+        DeepTrack
+      </span>
     </a>
 
-    <!-- Clean Actions: Compact Theme Toggle + Single Primary Button -->
+    <!-- Right: Account avatar (top-right, Google-style) + Theme Toggle + Nav Button -->
     <div class="flex items-center gap-3">
-      <!-- PFP (If Logged In) -->
-      {#if userSession?.user}
-        <div class="w-10 h-10 rounded-full border border-[var(--md-sys-color-outline-variant)] overflow-hidden bg-[var(--md-sys-color-surface-container-highest)] flex items-center justify-center shrink-0">
-          {#if userSession.user.user_metadata?.avatar_url}
-            <img src={userSession.user.user_metadata.avatar_url} alt="Profile" class="w-full h-full object-cover" />
-          {:else}
-            <span class="material-symbols-rounded text-[var(--md-sys-color-on-surface-variant)] text-xl">person</span>
-          {/if}
-        </div>
-      {/if}
+      <!-- Top-right account avatar — always occupies space to prevent layout shift -->
+      <AccountPopover anchor="top-right" />
 
       <!-- Circular Theme Toggle -->
       <button
         type="button"
-        class="w-10 h-10 rounded-full flex items-center justify-center text-[var(--md-sys-color-on-surface-variant)] hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)] border border-[var(--md-sys-color-outline-variant)] transition-all duration-200 active:scale-95"
+        class="w-10 h-10 rounded-full flex items-center justify-center text-[var(--md-sys-color-on-surface-variant)] hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)] border border-[var(--md-sys-color-outline-variant)] transition-all duration-200 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)]"
         onclick={handleThemeToggle}
         title="Toggle Theme"
         aria-label="Toggle theme"

@@ -3,18 +3,17 @@
   import Footer from '$lib/components/Footer.svelte';
   import RoverLogo from '$lib/components/RoverLogo.svelte';
   import { supabase } from '$lib/supabaseClient.js';
+  import { auth } from '$lib/stores/auth.svelte.js';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { sendShared, receiveShared, m3Expand, m3TopLevelFadeThrough } from '$lib/utils/motion.js';
 
   let mode = $state('login');
 
-  onMount(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        goto('/dashboard');
-      }
-    });
+  $effect(() => {
+    if (!auth.isLoading && auth.user) {
+      goto('/dashboard');
+    }
   }); // 'login' or 'register'
   let email = $state('');
   let password = $state('');
@@ -31,7 +30,7 @@
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/dashboard`
+          redirectTo: `${window.location.origin}/auth/callback`
         }
       });
       if (error) throw error;
@@ -49,7 +48,7 @@
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'github',
         options: {
-          redirectTo: `${window.location.origin}/dashboard`
+          redirectTo: `${window.location.origin}/auth/callback`
         }
       });
       if (error) throw error;
@@ -101,9 +100,14 @@
 </script>
 
 <svelte:head>
-  <title>DeepTrack — Operator Authentication Portal</title>
+  <title>DeepTrack · Sign In</title>
 </svelte:head>
 
+{#if auth.isLoading || auth.user}
+  <div class="min-h-screen flex items-center justify-center bg-[var(--md-sys-color-surface)]">
+    <span class="material-symbols-rounded animate-spin text-4xl text-[var(--md-sys-color-primary)]">progress_activity</span>
+  </div>
+{:else}
 <div class="min-h-screen flex flex-col bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)] select-none">
   <!-- Shared Top Navigation -->
   <Navbar active="auth" />
@@ -162,7 +166,7 @@
 
         <!-- Error / Success Banners -->
         {#if errorMessage}
-          <div transition:m3Expand class="mb-5 overflow-hidden"><div class="p-3.5 rounded-xl bg-[var(--md-sys-color-error-container)] text-[var(--md-sys-color-on-error-container)] text-xs flex items-center gap-2.5">
+          <div transition:m3Expand class="mb-5 overflow-hidden"><div id="auth-error" class="p-3.5 rounded-xl bg-[var(--md-sys-color-error-container)] text-[var(--md-sys-color-on-error-container)] text-xs flex items-center gap-2.5" role="alert" aria-live="polite">
             <span class="material-symbols-rounded text-base filled text-[var(--md-sys-color-error)]">error</span>
             <span class="font-medium">{errorMessage}</span>
           </div></div>
@@ -188,6 +192,8 @@
                 required
                 placeholder="operator@deeptrack.internal"
                 autocomplete="email"
+                aria-invalid={errorMessage ? 'true' : undefined}
+                aria-describedby={errorMessage ? 'auth-error' : undefined}
                 class="w-full text-sm"
               />
             </div>
@@ -210,6 +216,8 @@
                 minlength="6"
                 placeholder="••••••••••••"
                 autocomplete={mode === 'login' ? 'current-password' : 'new-password'}
+                aria-invalid={errorMessage ? 'true' : undefined}
+                aria-describedby={errorMessage ? 'auth-error' : undefined}
                 class="w-full text-sm pr-12 telemetry"
               />
               <button
@@ -302,3 +310,5 @@
   <!-- Shared Footer -->
   <Footer />
 </div>
+
+{/if}
