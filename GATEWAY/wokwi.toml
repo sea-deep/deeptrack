@@ -1,5 +1,0 @@
-[wokwi]
-version = 1
-firmware = '.pio/build/gateway/firmware.bin'
-elf = '.pio/build/gateway/firmware.elf'
-rfc2217ServerPort = 4001

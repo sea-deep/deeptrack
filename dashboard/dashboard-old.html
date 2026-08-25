@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DEEPTRACK — Mine Rescue Rover Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<style>
+  :root{
+    --bg:#070c0a;
+    --panel:#0e1714;
+    --panel-2:#0a120f;
+    --line:#23342c;
+    --line-soft:#182620;
+    --line-bright:#3d5747;
+    --text:#eef6f1;
+    --text-dim:#7e9c8f;
+    --amber:#ffb03c;
+    --amber-dim:#7a5420;
+    --cyan:#46e0c4;
+    --cyan-dim:#1c5147;
+    --green:#4cd88a;
+    --green-dim:#17422b;
+    --red:#ff4a3d;
+    --red-dim:#4a1815;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:'IBM Plex Mono',monospace;}
+  body{
+    background:
+      radial-gradient(ellipse 900px 500px at 50% -10%, #101d18 0%, transparent 60%),
+      var(--bg);
+  }
+  body::before{
+    content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
+    background-image:repeating-linear-gradient(0deg,
+      rgba(255,255,255,0.014) 0px, rgba(255,255,255,0.014) 1px,
+      transparent 1px, transparent 3px);
+    mix-blend-mode:overlay;
+  }
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-track{background:var(--panel-2);}
+  ::-webkit-scrollbar-thumb{background:var(--line-bright);}
+
+  .display{font-family:'Oswald',sans-serif;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;}
+  .hud{font-family:'Rajdhani',sans-serif;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;}
+
+  .wrap{display:flex;flex-direction:column;height:100vh;}
+
+  /* ---------- Header ---------- */
+  header{
+    display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
+    gap:10px;padding:12px 22px;position:relative;
+    background:linear-gradient(180deg,#131f1a,#0b1310);
+    border-bottom:1px solid var(--line);
+  }
+  header::after{
+    content:'';position:absolute;left:0;right:0;bottom:-1px;height:3px;
+    background:repeating-linear-gradient(45deg,var(--amber) 0 10px, #0b1310 10px 20px);
+    opacity:0.5;
+  }
+  .brand{display:flex;align-items:center;gap:12px;}
+  .brand .mark{width:12px;height:12px;background:var(--amber);
+    box-shadow:0 0 10px var(--amber),0 0 22px rgba(255,176,60,0.45);
+    transform:rotate(45deg);animation:markPulse 2.4s ease-in-out infinite;}
+  @keyframes markPulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
+  .brand h1{font-size:25px;margin:0;color:var(--text);
+    text-shadow:0 0 18px rgba(255,176,60,0.18);}
+  .brand small{display:block;font-family:'Rajdhani',sans-serif;font-size:10.5px;
+    color:var(--cyan);letter-spacing:0.16em;text-transform:uppercase;
+    margin-top:-3px;font-weight:600;}
+
+  .conn{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .btn{
+    font-family:'Rajdhani',sans-serif;font-size:12px;font-weight:600;
+    letter-spacing:0.06em;text-transform:uppercase;color:var(--text);
+    background:var(--panel-2);border:1px solid var(--line);padding:8px 15px;
+    cursor:pointer;transition:border-color .15s,color .15s,box-shadow .15s;
+    clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px);
+  }
+  .btn:hover{border-color:var(--amber);color:var(--amber);box-shadow:0 0 14px rgba(255,176,60,0.22);}
+  .btn:disabled{opacity:0.32;cursor:not-allowed;box-shadow:none;}
+  .btn.danger-btn:hover{border-color:var(--red);color:var(--red);box-shadow:0 0 14px rgba(255,74,61,0.25);}
+  .btn.mqtt-btn{border-color:var(--cyan-dim);}
+  .btn.mqtt-btn:hover{border-color:var(--cyan);color:var(--cyan);box-shadow:0 0 14px rgba(70,224,196,0.25);}
+  .btn.gw-btn{border-color:var(--green-dim);}
+  .btn.gw-btn:hover{border-color:var(--green);color:var(--green);box-shadow:0 0 14px rgba(76,216,138,0.25);}
+
+  .pill{display:flex;align-items:center;gap:7px;font-family:'Rajdhani',sans-serif;
+    font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-dim);}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim);}
+  .dot.live{background:var(--green);box-shadow:0 0 8px var(--green);animation:dotPing 1.6s ease-in-out infinite;}
+  .dot.off{background:#465049;}
+  @keyframes dotPing{0%,100%{box-shadow:0 0 6px var(--green);}
+    50%{box-shadow:0 0 15px var(--green),0 0 24px rgba(76,216,138,0.4);}}
+
+  .theme-picker{display:flex;align-items:center;gap:8px;padding-left:12px;border-left:1px solid var(--line);}
+  .theme-picker span{font-family:'Rajdhani',sans-serif;font-size:10px;color:var(--text-dim);
+    letter-spacing:0.1em;text-transform:uppercase;font-weight:600;}
+  .swatch-group{display:flex;gap:6px;}
+  .theme-swatch{width:16px;height:16px;border-radius:50%;border:2px solid transparent;
+    cursor:pointer;padding:0;box-shadow:0 0 6px rgba(0,0,0,0.4);}
+  .theme-swatch.active{border-color:var(--text);}
+
+  /* ---------- Dashboard grid ---------- */
+  .dashboard{flex:1;overflow-y:auto;padding:16px 18px 22px 18px;display:flex;flex-direction:column;gap:14px;}
+
+  .card{background:var(--panel);border:1px solid var(--line);padding:14px 16px;position:relative;}
+  .card::before{content:'';position:absolute;top:0;left:0;width:26px;height:3px;background:var(--cyan-dim);}
+  .card h3,.card h4{margin:0 0 10px 0;font-family:'Rajdhani',sans-serif;font-size:11px;
+    letter-spacing:0.14em;text-transform:uppercase;color:var(--text-dim);font-weight:700;
+    padding-left:9px;border-left:2px solid var(--cyan-dim);}
+
+  .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
+  .kpi-big{font-family:'Oswald',sans-serif;font-size:32px;font-weight:700;color:var(--text);
+    line-height:1;margin:2px 0 4px 0;}
+  .kpi-sub{font-family:'Rajdhani',sans-serif;font-size:11.5px;font-weight:600;
+    color:var(--text-dim);letter-spacing:0.04em;}
+
+  .mid-row{display:grid;grid-template-columns:300px 1fr 300px;gap:14px;align-items:stretch;}
+  .sensor-col,.status-col{display:flex;flex-direction:column;gap:12px;}
+
+  .sensor-card .gauge-top{display:flex;justify-content:space-between;font-size:11px;margin-bottom:6px;}
+  .sensor-card .name{font-family:'Rajdhani',sans-serif;color:var(--text-dim);text-transform:uppercase;
+    letter-spacing:0.06em;font-weight:600;}
+  .sensor-card .val{color:var(--cyan);font-weight:600;text-shadow:0 0 6px rgba(70,224,196,0.3);}
+  .sensor-card .val.hot{color:var(--red);text-shadow:0 0 8px rgba(255,74,61,0.5);}
+  .bar{position:relative;height:7px;background:var(--panel-2);border:1px solid var(--line);margin-bottom:8px;}
+  .bar .fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--cyan-dim),var(--cyan));
+    transition:width .25s;}
+  .bar .fill.hot{background:linear-gradient(90deg,var(--red-dim),var(--red));box-shadow:0 0 8px rgba(255,74,61,0.5);}
+  .bar .thresh{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--amber);box-shadow:0 0 6px var(--amber);}
+  .spark{width:100%;height:46px;display:block;}
+
+  .map-card{display:flex;flex-direction:column;overflow:hidden;padding:0;min-height:480px;}
+  .map-card::before{display:none;}
+  .map-head{display:flex;justify-content:space-between;align-items:baseline;
+    padding:14px 18px 10px 18px;border-bottom:1px solid var(--line-soft);position:relative;z-index:2;}
+  .map-head h2{font-size:22px;margin:0;color:var(--cyan);text-shadow:0 0 14px rgba(70,224,196,0.3);}
+  .map-head span{font-family:'Rajdhani',sans-serif;font-size:11px;font-weight:600;
+    color:var(--text-dim);letter-spacing:0.12em;text-transform:uppercase;}
+  .map-body{position:relative;flex:1;
+    background-image:repeating-radial-gradient(circle at 18% 22%,
+      rgba(70,224,196,0.045) 0px, transparent 1px, transparent 38px, rgba(70,224,196,0.045) 39px);}
+  .map-body::after{
+    content:'';position:absolute;inset:0;
+    background:conic-gradient(from 0deg, transparent 0deg, rgba(70,224,196,0.11) 16deg, transparent 38deg, transparent 360deg);
+    mix-blend-mode:screen;pointer-events:none;animation:sweep 6s linear infinite;}
+  @keyframes sweep{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+  #mapCanvas{width:100%;height:100%;display:block;position:relative;z-index:1;}
+
+  .state-badge{
+    display:inline-block;font-family:'Oswald',sans-serif;font-size:27px;font-weight:700;
+    letter-spacing:0.04em;text-transform:uppercase;padding:9px 16px;margin-top:2px;
+    border:1px solid var(--line);background:var(--panel-2);color:var(--text-dim);
+    clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px);
+  }
+  .state-badge.NORMAL{color:var(--green);border-color:var(--green-dim);box-shadow:0 0 10px rgba(76,216,138,0.15);}
+  .state-badge.SLOW{color:var(--amber);border-color:var(--amber-dim);box-shadow:0 0 10px rgba(255,176,60,0.15);}
+  .state-badge.AVOIDING{color:var(--amber);border-color:var(--amber-dim);background:#241c0d;box-shadow:0 0 12px rgba(255,176,60,0.2);}
+  .state-badge.DANGER{color:#fff;border-color:var(--red);
+    background:repeating-linear-gradient(45deg, var(--red-dim) 0 10px, #150807 10px 20px);
+    background-size:200% 200%;animation:pulse 0.9s infinite, stripeShift 1s linear infinite;
+    text-shadow:0 0 8px rgba(255,74,61,0.7);}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 rgba(224,85,74,0);}50%{box-shadow:0 0 16px rgba(255,74,61,0.6);}}
+  @keyframes stripeShift{from{background-position:0 0;}to{background-position:40px 0;}}
+
+  .indicators{display:flex;gap:10px;margin-bottom:10px;}
+  .led{flex:1;text-align:center;padding:9px 0;border:1px solid var(--line);background:var(--panel-2);}
+  .led .lamp{width:15px;height:15px;border-radius:50%;margin:0 auto 7px auto;background:#26302a;
+    box-shadow:inset 0 0 3px rgba(0,0,0,0.5);}
+  .led.on-red .lamp{background:var(--red);box-shadow:0 0 10px var(--red),0 0 20px rgba(255,74,61,0.5),
+    inset 0 0 4px rgba(255,255,255,0.5);animation:dotPing 0.8s ease-in-out infinite;}
+  .led.on-green .lamp{background:var(--green);box-shadow:0 0 10px var(--green),0 0 20px rgba(76,216,138,0.5),
+    inset 0 0 4px rgba(255,255,255,0.5);}
+  .led label{font-family:'Rajdhani',sans-serif;font-size:10px;letter-spacing:0.1em;color:var(--text-dim);
+    text-transform:uppercase;font-weight:600;}
+  .buzz{text-align:center;font-family:'Rajdhani',sans-serif;font-size:11px;font-weight:600;
+    letter-spacing:0.1em;color:var(--text-dim);padding:8px;border:1px dashed var(--line);text-transform:uppercase;}
+  .buzz.active{color:var(--red);border-color:var(--red);background:rgba(255,74,61,0.08);animation:pulse 0.6s infinite;}
+
+  .stat-row{display:flex;justify-content:space-between;font-size:12px;padding:4.5px 0;
+    border-bottom:1px solid var(--line-soft);color:var(--text-dim);}
+  .stat-row:last-child{border-bottom:none;}
+  .stat-row b{color:var(--text);font-weight:600;}
+
+  .bottom-row{display:grid;grid-template-columns:1.4fr 1fr;gap:14px;}
+  .log{max-height:230px;overflow-y:auto;font-size:11px;}
+  .log-entry{padding:5px 0;border-bottom:1px solid var(--line-soft);color:var(--text-dim);}
+  .log-entry b{color:var(--red);}
+  .log-entry.info b{color:var(--cyan);}
+
+  .hazard-list{max-height:230px;overflow-y:auto;font-size:11.5px;}
+  .hazard-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;
+    border-bottom:1px solid var(--line-soft);}
+  .hazard-row:last-child{border-bottom:none;}
+  .hz-cause{font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:0.05em;
+    color:var(--red);text-transform:uppercase;}
+  .hz-pos{color:var(--text-dim);}
+
+  .empty-hint{color:var(--text-dim);font-size:12px;text-align:center;margin-top:20px;line-height:1.6;}
+
+  @media(max-width:1150px){
+    .mid-row{grid-template-columns:1fr;}
+    .kpi-row{grid-template-columns:repeat(2,1fr);}
+    .bottom-row{grid-template-columns:1fr;}
+    .map-card{min-height:360px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="mark"></div>
+      <div>
+        <h1 class="display">DEEPTRACK</h1>
+        <small>Mine Rescue Rover — Live Console</small>
+      </div>
+    </div>
+    <div class="conn">
+      <div class="pill"><span class="dot off" id="connDot"></span><span id="connLabel">Offline</span></div>
+      <button class="btn mqtt-btn" id="mqttBtn">Connect MQTT</button>
+      <button class="btn gw-btn" id="connectBtn">Connect Serial</button>
+      <button class="btn" id="demoBtn">Demo Mode</button>
+      <button class="btn danger-btn" id="resetBtn">Reset Path</button>
+      <div class="theme-picker">
+        <span>Graph theme</span>
+        <div class="swatch-group" id="themeSwatches">
+          <button class="theme-swatch active" data-theme="cyan" style="background:#46e0c4" title="Cyan"></button>
+          <button class="theme-swatch" data-theme="amber" style="background:#ffb03c" title="Amber"></button>
+          <button class="theme-swatch" data-theme="emerald" style="background:#4cd88a" title="Emerald"></button>
+          <button class="theme-swatch" data-theme="violet" style="background:#b48cff" title="Violet"></button>
+          <button class="theme-swatch" data-theme="mono" style="background:#e7ece8" title="Mono"></button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="dashboard">
+
+    <!-- KPI row -->
+    <div class="kpi-row">
+      <div class="card kpi">
+        <h4>Distance Traveled</h4>
+        <div class="kpi-big" id="s-dist">0 cm</div>
+        <div class="kpi-sub">Total path length</div>
+      </div>
+      <div class="card kpi">
+        <h4>Front Distance</h4>
+        <div class="kpi-big" id="s-front">—</div>
+        <div class="kpi-sub">Obstacle clearance</div>
+      </div>
+      <div class="card kpi">
+        <h4>Heading</h4>
+        <div class="kpi-big" id="s-heading">—</div>
+        <div class="kpi-sub" id="s-pos">Position —, —</div>
+      </div>
+      <div class="card kpi">
+        <h4>Rover State</h4>
+        <div class="state-badge NORMAL" id="stateBadge">—</div>
+      </div>
+    </div>
+
+    <!-- Sensors / Map / Status -->
+    <div class="mid-row">
+      <div class="sensor-col">
+        <div class="card sensor-card">
+          <div class="gauge-top"><span class="name">Temperature</span><span class="val" id="v-temp">— °C</span></div>
+          <div class="bar"><div class="fill" id="b-temp"></div><div class="thresh" style="left:83%"></div></div>
+          <canvas class="spark" id="spark-temp"></canvas>
+        </div>
+        <div class="card sensor-card">
+          <div class="gauge-top"><span class="name">Humidity</span><span class="val" id="v-hum">— %</span></div>
+          <div class="bar"><div class="fill" id="b-hum"></div><div class="thresh" style="left:85%"></div></div>
+          <canvas class="spark" id="spark-hum"></canvas>
+        </div>
+        <div class="card sensor-card">
+          <div class="gauge-top"><span class="name">Methane / CH4 (MQ-4)</span><span class="val" id="v-gas">—</span></div>
+          <div class="bar"><div class="fill" id="b-gas"></div><div class="thresh" style="left:44%"></div></div>
+          <canvas class="spark" id="spark-gas"></canvas>
+        </div>
+        <div class="card sensor-card">
+          <div class="gauge-top"><span class="name">Water</span><span class="val" id="v-water">—</span></div>
+          <div class="bar"><div class="fill" id="b-water"></div><div class="thresh" style="left:61%"></div></div>
+          <canvas class="spark" id="spark-water"></canvas>
+        </div>
+        <div class="card sensor-card">
+          <div class="gauge-top"><span class="name">Tilt</span><span class="val" id="v-tilt">— °</span></div>
+          <div class="bar"><div class="fill" id="b-tilt"></div><div class="thresh" style="left:67%"></div></div>
+          <canvas class="spark" id="spark-tilt"></canvas>
+        </div>
+      </div>
+
+      <div class="card map-card">
+        <div class="map-head">
+          <h2 class="display">Path Trace</h2>
+          <span id="mapSubtitle">dead-reckoned · cm</span>
+        </div>
+        <div class="map-body">
+          <canvas id="mapCanvas"></canvas>
+        </div>
+      </div>
+
+      <div class="status-col">
+        <div class="card">
+          <h4>Status &amp; Alerts</h4>
+          <div class="indicators">
+            <div class="led on-green" id="ledGreen"><div class="lamp"></div><label>Normal</label></div>
+            <div class="led" id="ledRed"><div class="lamp"></div><label>Danger</label></div>
+          </div>
+          <div class="buzz" id="buzzBox">Buzzer silent</div>
+        </div>
+        <div class="card">
+          <h4>Navigation</h4>
+          <div class="stat-row"><span>Encoders L / R</span><b id="s-enc">—</b></div>
+          <div class="stat-row"><span>Hazards logged</span><b id="s-hazcount">0</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Event log / Hazards -->
+    <div class="bottom-row">
+      <div class="card">
+        <h3>Event Log</h3>
+        <div class="log" id="logBox"></div>
+      </div>
+      <div class="card">
+        <h3>Hazard Markers</h3>
+        <div class="hazard-list" id="hazardList">
+          <div class="empty-hint">No hazards recorded yet.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const THRESH = { temp: 50, hum: 85, gas: 1800, water: 2500, tilt: 40 };
+const MAXV   = { temp: 60, hum: 100, gas: 4095, water: 4095, tilt: 60 };
+
+// State → path color mapping
+const STATE_COLORS = {
+  NORMAL:   '#4cc27a',
+  SLOW:     '#e8a33d',
+  AVOIDING: '#d4912e',
+  DANGER:   '#e0554a'
+};
+
+let port, reader, keepReading = false;
+let trail = [];       // {x, y, heading, state, danger}
+let hazards = [];     // {x, y, cause}
+let latest = null;
+let wasDanger = false;
+let totalDistCm = 0;  // cumulative distance
+
+const canvas = document.getElementById('mapCanvas');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas(){
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+}
+window.addEventListener('resize', () => { resizeCanvas(); drawMap(); drawAllSparks(); });
+resizeCanvas();
+
+function log(msg, cls=''){
+  const box = document.getElementById('logBox');
+  const t = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + cls;
+  div.innerHTML = `<b>${t}</b> — ${msg}`;
+  box.prepend(div);
+  while(box.children.length > 60) box.removeChild(box.lastChild);
+}
+
+function setGauge(key, value, unit, decimals=0){
+  const pct = Math.max(0, Math.min(100, (value / MAXV[key]) * 100));
+  const hot = value >= THRESH[key];
+  document.getElementById('v-'+key).textContent = value.toFixed(decimals) + ' ' + unit;
+  document.getElementById('v-'+key).classList.toggle('hot', hot);
+  const fill = document.getElementById('b-'+key);
+  fill.style.width = pct + '%';
+  fill.classList.toggle('hot', hot);
+}
+
+// ---------- Per-sensor trend history + sparkline graphs ----------
+const HIST_MAX = 150;
+let hist = { temp: [], hum: [], gas: [], water: [], tilt: [] };
+const CHART_THEMES = { cyan:'#46e0c4', amber:'#ffb03c', emerald:'#4cd88a', violet:'#b48cff', mono:'#e7ece8' };
+let chartTheme = 'cyan';
+
+function pushHist(key, val){
+  if (typeof val !== 'number') return;
+  hist[key].push(val);
+  if (hist[key].length > HIST_MAX) hist[key].shift();
+}
+
+function drawSpark(canvasEl, data, threshold, maxVal, color){
+  if (!canvasEl) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvasEl.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  canvasEl.width = rect.width * dpr;
+  canvasEl.height = rect.height * dpr;
+  const c = canvasEl.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = rect.width, h = rect.height;
+  c.clearRect(0, 0, w, h);
+  if (data.length < 2) return;
+
+  // threshold reference line
+  const ty = h - Math.max(0, Math.min(1, threshold / maxVal)) * h;
+  c.strokeStyle = 'rgba(255,176,60,0.35)';
+  c.setLineDash([3, 3]);
+  c.lineWidth = 1;
+  c.beginPath(); c.moveTo(0, ty); c.lineTo(w, ty); c.stroke();
+  c.setLineDash([]);
+
+  const stepX = w / (data.length - 1);
+  const yFor = v => h - Math.max(0, Math.min(1, v / maxVal)) * h;
+
+  // filled area under the line
+  c.beginPath();
+  data.forEach((v, i) => { const x = i * stepX, y = yFor(v); i === 0 ? c.moveTo(x, y) : c.lineTo(x, y); });
+  c.lineTo(w, h); c.lineTo(0, h); c.closePath();
+  const grad = c.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, color + '55');
+  grad.addColorStop(1, color + '00');
+  c.fillStyle = grad; c.fill();
+
+  // line
+  c.beginPath();
+  data.forEach((v, i) => { const x = i * stepX, y = yFor(v); i === 0 ? c.moveTo(x, y) : c.lineTo(x, y); });
+  c.strokeStyle = color; c.lineWidth = 1.8; c.stroke();
+
+  // last-value marker
+  const lastV = data[data.length - 1];
+  c.fillStyle = color;
+  c.beginPath(); c.arc(w - 1.5, yFor(lastV), 2.5, 0, 7); c.fill();
+}
+
+function drawAllSparks(){
+  const color = CHART_THEMES[chartTheme];
+  drawSpark(document.getElementById('spark-temp'),  hist.temp,  THRESH.temp,  MAXV.temp,  color);
+  drawSpark(document.getElementById('spark-hum'),   hist.hum,   THRESH.hum,   MAXV.hum,   color);
+  drawSpark(document.getElementById('spark-gas'),   hist.gas,   THRESH.gas,   MAXV.gas,   color);
+  drawSpark(document.getElementById('spark-water'), hist.water, THRESH.water, MAXV.water, color);
+  drawSpark(document.getElementById('spark-tilt'),  hist.tilt,  THRESH.tilt,  MAXV.tilt,  color);
+}
+
+document.querySelectorAll('.theme-swatch').forEach(btn => {
+  btn.addEventListener('click', () => {
+    chartTheme = btn.dataset.theme;
+    document.querySelectorAll('.theme-swatch').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    drawAllSparks();
+  });
+});
+
+// ---------- Hazard list ----------
+function renderHazardList(){
+  const box = document.getElementById('hazardList');
+  if (!box) return;
+  if (hazards.length === 0){
+    box.innerHTML = '<div class="empty-hint">No hazards recorded yet.</div>';
+  } else {
+    box.innerHTML = hazards.slice().reverse().map(hz => `
+      <div class="hazard-row">
+        <span class="hz-cause">${hz.cause}</span>
+        <span class="hz-pos">${hz.x.toFixed(1)}, ${hz.y.toFixed(1)} cm</span>
+      </div>`).join('');
+  }
+  const countEl = document.getElementById('s-hazcount');
+  if (countEl) countEl.textContent = hazards.length;
+}
+
+function drawMap(){
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = '#0f1512';
+  ctx.fillRect(0,0,w,h);
+
+  if (trail.length === 0){
+    ctx.fillStyle = '#8ea295';
+    ctx.font = '12px IBM Plex Mono';
+    ctx.textAlign = 'center';
+    ctx.fillText('waiting for telemetry…', w/2, h/2);
+    return;
+  }
+
+  // fit bounds with padding
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  trail.forEach(p=>{minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);
+                    minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y);});
+  const padCm = 40;
+  minX-=padCm; maxX+=padCm; minY-=padCm; maxY+=padCm;
+  const spanX = Math.max(maxX-minX, 80), spanY = Math.max(maxY-minY, 80);
+  const scale = Math.min(w/spanX, h/spanY);
+  const ox = w/2 - ((minX+maxX)/2)*scale;
+  const oy = h/2 + ((minY+maxY)/2)*scale; // y flipped for screen coords
+
+  const toScreen = (x,y) => [ox + x*scale, oy - y*scale];
+
+  // grid, every 50cm
+  ctx.strokeStyle = '#1a231e';
+  ctx.lineWidth = 1;
+  const gridStep = 50;
+  for(let gx = Math.floor(minX/gridStep)*gridStep; gx < maxX; gx += gridStep){
+    const [sx] = toScreen(gx, 0);
+    ctx.beginPath(); ctx.moveTo(sx,0); ctx.lineTo(sx,h); ctx.stroke();
+  }
+  for(let gy = Math.floor(minY/gridStep)*gridStep; gy < maxY; gy += gridStep){
+    const [,sy] = toScreen(0, gy);
+    ctx.beginPath(); ctx.moveTo(0,sy); ctx.lineTo(w,sy); ctx.stroke();
+  }
+
+  // trail line — color-coded by rover state
+  ctx.lineWidth = 2.5;
+  for (let i = 1; i < trail.length; i++){
+    const p0 = trail[i-1], p1 = trail[i];
+    const [x0,y0] = toScreen(p0.x, p0.y);
+    const [x1,y1] = toScreen(p1.x, p1.y);
+    ctx.strokeStyle = STATE_COLORS[p1.state] || '#e8a33d';
+    ctx.beginPath();
+    ctx.moveTo(x0,y0);
+    ctx.lineTo(x1,y1);
+    ctx.stroke();
+  }
+
+  // direction arrows along the path every 25 points
+  for (let i = 25; i < trail.length; i += 25){
+    const p = trail[i];
+    const [ax, ay] = toScreen(p.x, p.y);
+    const rad = (p.heading||0) * Math.PI/180;
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.rotate(-rad);
+    ctx.fillStyle = 'rgba(142,162,149,0.6)';
+    ctx.beginPath();
+    ctx.moveTo(5,0); ctx.lineTo(-3,3); ctx.lineTo(-3,-3); ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // start marker
+  const [sx0,sy0] = toScreen(trail[0].x, trail[0].y);
+  ctx.fillStyle = '#4cc27a';
+  ctx.beginPath(); ctx.arc(sx0,sy0,5,0,7); ctx.fill();
+  ctx.font = '10px IBM Plex Mono';
+  ctx.fillStyle = '#4cc27a';
+  ctx.textAlign = 'left';
+  ctx.fillText('START', sx0+8, sy0+3);
+
+  // hazard flags
+  hazards.forEach(hz=>{
+    const [hx,hy] = toScreen(hz.x, hz.y);
+    ctx.fillStyle = '#e0554a';
+    ctx.beginPath(); ctx.arc(hx,hy,5,0,7); ctx.fill();
+    ctx.font = '10px IBM Plex Mono';
+    ctx.fillStyle = '#e0554a';
+    ctx.textAlign = 'left';
+    ctx.fillText(hz.cause, hx+8, hy+3);
+  });
+
+  // rover marker + heading arrow
+  const last = trail[trail.length-1];
+  const [rx,ry] = toScreen(last.x, last.y);
+  const rad = (last.heading||0) * Math.PI/180;
+  ctx.save();
+  ctx.translate(rx,ry);
+  ctx.rotate(-rad);
+  ctx.fillStyle = last.danger ? '#e0554a' : '#e8a33d';
+  ctx.beginPath();
+  ctx.moveTo(12,0); ctx.lineTo(-7,7); ctx.lineTo(-4,0); ctx.lineTo(-7,-7); ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // legend
+  ctx.font = '10px IBM Plex Mono';
+  ctx.textAlign = 'left';
+  const legend = [['NORMAL','#4cc27a'],['SLOW','#e8a33d'],['AVOIDING','#d4912e'],['DANGER','#e0554a']];
+  legend.forEach(([label,color],i) => {
+    const lx = 14, ly = h - 14 - (legend.length - 1 - i) * 16;
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, ly - 6, 10, 10);
+    ctx.fillStyle = '#8ea295';
+    ctx.fillText(label, lx + 14, ly + 3);
+  });
+}
+
+function handleTelemetry(raw){
+  // Normalize short & long keys
+  const d = {
+    tempC: raw.t ?? raw.tempC,
+    hum: raw.h ?? raw.hum,
+    gas: raw.gas,
+    frontCm: raw.dist ?? raw.frontCm,
+    water: raw.water,
+    tiltDeg: raw.tilt ?? raw.tiltDeg,
+    x: raw.x ?? 0,
+    y: raw.y ?? 0,
+    heading: raw.hd ?? raw.heading ?? 0,
+    state: raw.st ?? raw.state ?? 'NORMAL',
+    dangerCause: raw.danger ?? raw.dangerCause ?? 'NONE',
+    encL: raw.encL,
+    encR: raw.encR
+  };
+  latest = d;
+
+  const danger = d.state === 'DANGER';
+  document.getElementById('ledGreen').classList.toggle('on-green', !danger);
+  document.getElementById('ledRed').classList.toggle('on-red', danger);
+  const buzz = document.getElementById('buzzBox');
+  buzz.textContent = danger ? `BUZZER — ${d.dangerCause}` : 'Buzzer silent';
+  buzz.classList.toggle('active', danger);
+
+  const badge = document.getElementById('stateBadge');
+  badge.textContent = d.state;
+  badge.className = 'state-badge ' + d.state;
+
+  if (typeof d.tempC === 'number' && d.tempC > -900){ setGauge('temp', d.tempC, '°C', 1); pushHist('temp', d.tempC); }
+  if (typeof d.hum === 'number' && d.hum > -900){ setGauge('hum', d.hum, '%', 1); pushHist('hum', d.hum); }
+  if (typeof d.gas === 'number'){ setGauge('gas', d.gas, '', 0); pushHist('gas', d.gas); }
+  if (typeof d.water === 'number'){ setGauge('water', d.water, '', 0); pushHist('water', d.water); }
+  if (typeof d.tiltDeg === 'number'){ setGauge('tilt', d.tiltDeg, '°', 1); pushHist('tilt', d.tiltDeg); }
+  drawAllSparks();
+
+  document.getElementById('s-front').textContent = (d.frontCm ?? '—') + ' cm';
+  document.getElementById('s-pos').textContent = `Position ${(d.x??0).toFixed(1)}, ${(d.y??0).toFixed(1)} cm`;
+  document.getElementById('s-heading').textContent = (d.heading ?? 0).toFixed(1) + '°';
+  document.getElementById('s-enc').textContent = `${d.encL ?? '—'} / ${d.encR ?? '—'}`;
+
+  if (typeof d.x === 'number' && typeof d.y === 'number'){
+    const prev = trail.length > 0 ? trail[trail.length - 1] : null;
+    const moved = !prev || Math.abs(d.x - prev.x) > 0.05 || Math.abs(d.y - prev.y) > 0.05
+                        || Math.abs((d.heading||0) - (prev.heading||0)) > 0.5;
+    if (moved) {
+      if (prev) {
+        const dx = d.x - prev.x, dy = d.y - prev.y;
+        totalDistCm += Math.sqrt(dx*dx + dy*dy);
+      }
+      trail.push({x:d.x, y:d.y, heading:d.heading||0, danger, state: d.state||'NORMAL'});
+      if (trail.length > 4000) trail.shift();
+    }
+    document.getElementById('s-dist').textContent =
+      totalDistCm < 100 ? totalDistCm.toFixed(0) + ' cm'
+                        : (totalDistCm / 100).toFixed(2) + ' m';
+  }
+
+  if (danger && !wasDanger){
+    log(`DANGER — ${d.dangerCause}`, '');
+    if (typeof d.x === 'number') hazards.push({x:d.x, y:d.y, cause:d.dangerCause});
+    renderHazardList();
+  }
+  if (!danger && wasDanger){
+    log('Cleared, resuming', 'info');
+  }
+  wasDanger = danger;
+
+  drawMap();
+}
+
+// ---------- Hot-Pluggable MQTT over WebSocket ----------
+let mqttConn = null;
+const MQTT_TOPIC = 'deeptrack/rover/telemetry';
+const MQTT_WS_URL = 'wss://broker.hivemq.com:8884/mqtt';
+
+function connectMQTT(){
+  if (mqttConn && mqttConn.connected){
+    disconnectMQTT();
+    return;
+  }
+  log('Connecting to HiveMQ broker…', 'info');
+  try {
+    mqttConn = mqtt.connect(MQTT_WS_URL, {
+      clientId: 'deeptrack-dash-' + Math.random().toString(16).slice(2,8),
+      clean: true,
+      connectTimeout: 8000,
+      reconnectPeriod: 5000
+    });
+
+    mqttConn.on('connect', () => {
+      document.getElementById('connDot').className = 'dot live';
+      document.getElementById('connLabel').textContent = 'MQTT Live';
+      document.getElementById('mqttBtn').textContent = 'Disconnect MQTT';
+      document.getElementById('connectBtn').disabled = true;
+      document.getElementById('demoBtn').disabled = true;
+      log('MQTT connected — subscribed to ' + MQTT_TOPIC, 'info');
+      mqttConn.subscribe(MQTT_TOPIC);
+    });
+
+    mqttConn.on('message', (topic, payload) => {
+      try {
+        const d = JSON.parse(payload.toString());
+        handleTelemetry(d);
+      } catch(e) { /* ignore partial */ }
+    });
+
+    mqttConn.on('error', (err) => {
+      log('MQTT error: ' + err.message, '');
+    });
+
+    mqttConn.on('close', () => {
+      document.getElementById('connDot').className = 'dot off';
+      document.getElementById('connLabel').textContent = 'Offline';
+      document.getElementById('mqttBtn').textContent = 'Connect MQTT';
+      document.getElementById('connectBtn').disabled = false;
+      document.getElementById('demoBtn').disabled = false;
+    });
+
+  } catch(err) {
+    log('MQTT connection failed: ' + err.message, '');
+  }
+}
+
+function disconnectMQTT(){
+  if (mqttConn) {
+    mqttConn.end(true);
+    mqttConn = null;
+  }
+  document.getElementById('connDot').className = 'dot off';
+  document.getElementById('connLabel').textContent = 'Offline';
+  document.getElementById('mqttBtn').textContent = 'Connect MQTT';
+  document.getElementById('connectBtn').disabled = false;
+  document.getElementById('demoBtn').disabled = false;
+  log('MQTT disconnected.', 'info');
+}
+
+document.getElementById('mqttBtn').addEventListener('click', connectMQTT);
+
+// ---------- Web Serial — connect to Gateway USB ----------
+async function connect(){
+  if (!('serial' in navigator)){
+    log('Web Serial not supported — use Chrome or Edge on desktop.', '');
+    alert('Web Serial API is not available in this browser. Please use Chrome or Edge on desktop, connected over HTTPS or localhost.');
+    return;
+  }
+  try{
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    keepReading = true;
+    document.getElementById('connDot').className = 'dot live';
+    document.getElementById('connLabel').textContent = 'Serial Live';
+    document.getElementById('connectBtn').textContent = 'Disconnect';
+    document.getElementById('mqttBtn').disabled = true;
+    document.getElementById('demoBtn').disabled = true;
+    log('Gateway serial link established.', 'info');
+    readLoop();
+  }catch(err){
+    log('Connection failed: ' + err.message);
+  }
+}
+
+async function disconnect(){
+  keepReading = false;
+  try{ if(reader) await reader.cancel(); }catch(e){}
+  try{ if(port) await port.close(); }catch(e){}
+  document.getElementById('connDot').className = 'dot off';
+  document.getElementById('connLabel').textContent = 'Offline';
+  document.getElementById('connectBtn').textContent = 'Connect Serial';
+  document.getElementById('mqttBtn').disabled = false;
+  document.getElementById('demoBtn').disabled = false;
+  log('Disconnected.', 'info');
+}
+
+async function readLoop(){
+  const textDecoder = new TextDecoderStream();
+  const readableClosed = port.readable.pipeTo(textDecoder.writable);
+  reader = textDecoder.readable.getReader();
+  let buffer = '';
+
+  try{
+    while(keepReading){
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      let idx;
+      while((idx = buffer.indexOf('\n')) >= 0){
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx+1);
+        if (!line.startsWith('{')) continue;
+        try{
+          const d = JSON.parse(line);
+          handleTelemetry(d);
+        }catch(e){ /* partial/garbled line, skip */ }
+      }
+    }
+  }catch(e){
+    log('Read error: ' + e.message);
+  }finally{
+    reader.releaseLock();
+  }
+}
+
+document.getElementById('connectBtn').addEventListener('click', () => {
+  if (keepReading) disconnect(); else connect();
+});
+document.getElementById('resetBtn').addEventListener('click', () => {
+  trail = []; hazards = []; totalDistCm = 0;
+  hist = { temp: [], hum: [], gas: [], water: [], tilt: [] };
+  document.getElementById('s-dist').textContent = '0 cm';
+  drawMap();
+  drawAllSparks();
+  renderHazardList();
+  log('Path cleared.', 'info');
+});
+
+// ---------- Demo mode: synthetic telemetry ----------
+let demoRunning = false, demoTimer = null;
+let demoX=0, demoY=0, demoHeading=0, demoT=0;
+
+function demoTick(){
+  demoT += 1;
+  const avoiding = (demoT % 30 >= 25 && demoT % 30 <= 29);
+  const danger   = (demoT % 55 === 0);
+
+  if (avoiding && demoT % 30 === 25) {
+    demoHeading += (Math.random() > 0.5 ? 1 : -1) * (40 + Math.random() * 30);
+  } else if (!avoiding && !danger) {
+    demoHeading += (Math.random()-0.5) * 8;
+  }
+
+  const step = danger ? -2 : (avoiding ? 1 : 4);
+  demoX += step * Math.cos(demoHeading*Math.PI/180);
+  demoY += step * Math.sin(demoHeading*Math.PI/180);
+
+  const causes = ['GAS','TEMP','HUMIDITY','WATER','TRAPPED'];
+  const demoState = danger ? 'DANGER' : (avoiding ? 'AVOIDING' : (demoT % 20 < 3 ? 'SLOW' : 'NORMAL'));
+
+  handleTelemetry({
+    tempC: 28 + Math.sin(demoT/10)*4 + (danger?20:0),
+    hum: 60 + Math.sin(demoT/14)*10 + (danger?15:0),
+    gas: 400 + Math.abs(Math.sin(demoT/8))*300 + (danger?1500:0),
+    water: 300 + Math.abs(Math.cos(demoT/9))*200 + (danger?2400:0),
+    tiltDeg: 5 + Math.abs(Math.sin(demoT/6))*10,
+    frontCm: (20 + Math.abs(Math.sin(demoT/5))*60).toFixed(1),
+    encL: demoT*3, encR: demoT*3,
+    x: demoX, y: demoY, heading: demoHeading,
+    state: demoState,
+    dangerCause: danger ? causes[Math.floor(Math.random()*causes.length)] : 'NONE'
+  });
+}
+
+document.getElementById('demoBtn').addEventListener('click', () => {
+  demoRunning = !demoRunning;
+  const btn = document.getElementById('demoBtn');
+  document.getElementById('connectBtn').disabled = demoRunning;
+  document.getElementById('mqttBtn').disabled = demoRunning;
+  if (demoRunning){
+    btn.textContent = 'Stop Demo';
+    document.getElementById('connDot').className = 'dot live';
+    document.getElementById('connLabel').textContent = 'Demo';
+    log('Demo mode started — synthetic telemetry.', 'info');
+    demoTimer = setInterval(demoTick, 400);
+  } else {
+    btn.textContent = 'Demo Mode';
+    clearInterval(demoTimer);
+    document.getElementById('connDot').className = 'dot off';
+    document.getElementById('connLabel').textContent = 'Offline';
+    log('Demo mode stopped.', 'info');
+  }
+});
+
+drawMap();
+drawAllSparks();
+renderHazardList();
+</script>
+</body>
+</html>

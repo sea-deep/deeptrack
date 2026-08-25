@@ -1,450 +1,977 @@
-# DEEPTRACK — Circuit Wiring Guide
+## 1. complete project architecture
 
-Step-by-step pin-by-pin wiring for both the Rover and Gateway.
-All connections are **corrected** — diagram simulation shortcuts are replaced with real-hardware-safe wiring.
+tumhare project mein do independent ESP32 boards hain:
 
----
+| module              | role                                   | power                                  |
+| ------------------- | -------------------------------------- | -------------------------------------- |
+| rover ESP32         | motors, sensors, servo, LEDs, buzzer   | 2×18650 battery → buck converter → 5 V |
+| gateway ESP32       | laptop communication, LCD, status LEDs | laptop USB                             |
+| rover motor drivers | chaar TT motors control karte hain     | separate 4×AA NiMH battery pack        |
+| rover ↔ gateway     | ESP-NOW wireless communication         | koi physical data wire nahi            |
 
-## CRITICAL DIFFERENCE FROM WOKWI DIAGRAM
-
-The Wokwi diagram routes all 5V loads through the ESP32's tiny 5V pin. On real hardware this **will** brownout and potentially damage the board. This guide uses a **separate 5V power bus**.
-
-### Power Bus Setup (Do This First)
-
-```
-POWER BANK (USB-A port)
-    │
-    ├──[USB-A Breakout Board or cut USB cable]──→ +5V BUS (red wire)
-    │                                             │
-    │                                             ├→ ESP32 VIN pin
-    │                                             ├→ TB6612FNG VM pin
-    │                                             ├→ SG90 Servo V+ (red wire)
-    │                                             ├→ HC-SR04 VCC
-    │                                             ├→ MQ-4 Module VCC
-    │                                             │
-    │                                       [470µF cap across +5V and GND]
-    │
-    └──────────────────────────────────────→ GND BUS (black wire)
-                                              │
-                                              ├→ ESP32 GND (any GND pin)
-                                              ├→ TB6612FNG GND (both GND pins)
-                                              ├→ All sensor GND pins
-                                              ├→ All LED cathodes (via their circuits)
-                                              └→ Buzzer negative pin
-```
-
-**How to tap 5V from the power bank:**
-- **Option A (cleanest):** Use a USB-A female breakout board. Plug the power bank's USB cable into it. The breakout exposes 5V and GND as screw terminals or header pins.
-- **Option B (quick):** Cut a spare USB-A cable. The **red** wire is +5V, **black** is GND. Strip, tin, and connect to breadboard rails.
-
-The ESP32 gets its 5V through the **VIN** pin (not through Micro-USB in this setup). The onboard AMS1117 regulator converts VIN → 3.3V for the ESP32's logic.
-
-> You can ALSO power the ESP32 via its Micro-USB (plug a second cable from the power bank). In that case, skip connecting VIN and use the ESP32's `5V` pin only for the 3.3V LDO input — do NOT draw motor/servo current from it.
+rover ke andar logic battery aur motor battery ka **ground common** hoga. unke **positive terminals separate** rahenge.
 
 ---
 
-## ROVER ESP32 — Complete Pin Map
+## 2. tumhare actual ESP32 board ka complete physical pin map
 
-### GPIO Assignment Table
+board ko aise rakho ki **USB-C port upar** ho.
 
-| GPIO | Direction | Connected To | Wire Color | Notes |
-|---|---|---|---|---|
-| **VIN** | Power In | 5V Bus (+) | Red | Powers the ESP32 via onboard regulator |
-| **GND** | Power | GND Bus | Black | Use multiple GND pins to distribute current |
-| **3V3** | Power Out | 3.3V rail for logic sensors | Red | Max ~600mA from LDO. Feeds: DHT22, MPU6050, VL53L0X, encoders, water sensor |
-| **23** | Output | DHT22 DATA | Green | + 10kΩ pull-up to 3V3 (skip if using 3-pin module) |
-| **34** | ADC Input | MQ-4 AO (via voltage divider) | Orange | Input-only pin, no pull-up available |
-| **19** | Output | HC-SR04 TRIG | Cyan | 3.3V trigger pulse, HC-SR04 accepts it fine |
-| **18** | Input | HC-SR04 ECHO (via voltage divider) | Yellow | 5V → 3.0V through 10k/15k divider |
-| **21** | I2C SDA | MPU6050 SDA + VL53L0X SDA | Blue | Shared I2C bus, different addresses |
-| **22** | I2C SCL | MPU6050 SCL + VL53L0X SCL | Purple | Shared I2C bus |
-| **32** | Input (interrupt) | Left LM393 Speed Sensor DO | Green | Rising edge interrupt for pulse counting |
-| **35** | Input (interrupt) | Right LM393 Speed Sensor DO | Green | Input-only pin. Needs external 10kΩ pull-up to 3V3 |
-| **36 (VP)** | ADC Input | Water Level Sensor SIG | Cyan | Input-only pin. Powered from 3V3, output 0–3.3V |
-| **13** | PWM Output | SG90 Servo signal (orange wire) | Purple | 50Hz PWM for servo position |
-| **4** | Output | Buzzer (+) via 220Ω resistor | Orange | `tone()` generates alarm frequency |
-| **26** | Output | Red LED anode via 220Ω | Red | Danger indicator |
-| **27** | Output | Green LED anode via 220Ω | Green | Normal indicator |
-| **25** | PWM Output | TB6612FNG PWMA | Green | Left motor speed (LEDC CH0, 5kHz) |
-| **16** | Output | TB6612FNG AIN1 | Blue | Left motor direction bit 1 |
-| **17** | Output | TB6612FNG AIN2 | Orange | Left motor direction bit 2 |
-| **14** | PWM Output | TB6612FNG PWMB | Green | Right motor speed (LEDC CH1, 5kHz) |
-| **33** | Output | TB6612FNG BIN1 | Blue | Right motor direction bit 1 |
-| **2** | Output | TB6612FNG BIN2 | Orange | Right motor direction bit 2. **Caution:** GPIO2 is a boot strapping pin — disconnect this wire if flashing fails |
-| **5** | Output | TB6612FNG STBY | Purple | Pull HIGH to enable driver, LOW = standby |
+| left side, top → bottom | actual GPIO | assigned connection             | right side, top → bottom | actual GPIO | assigned connection                      |
+| ----------------------- | ----------: | ------------------------------- | ------------------------ | ----------: | ---------------------------------------- |
+| `3V3`                   |           — | 3.3 V power rail                | `VIN`                    |           — | regulated 5 V input                      |
+| `GND`                   |           — | common ground                   | `GND`                    |           — | common ground                            |
+| `D15`                   |          15 | unused; boot-sensitive          | `D13`                    |          13 | servo signal                             |
+| `D2`                    |           2 | unused; boot-sensitive          | `D12`                    |          12 | unused; boot-sensitive                   |
+| `D4`                    |           4 | buzzer control                  | `D14`                    |          14 | left motor direction 1                   |
+| `RX2`                   |          16 | left motor direction 2          | `D27`                    |          27 | green rover LED                          |
+| `TX2`                   |          17 | right motor PWM                 |                          |             |                                          |
+| `D26`                   |          26 | red rover LED                   |                          |             |                                          |
+| `D5`                    |           5 | unused; boot-sensitive          | `D25`                    |          25 | left motor PWM                           |
+| `D18`                   |          18 | HC-SR04 `ECHO`, through divider | `D33`                    |          33 | right motor direction 1                  |
+| `D19`                   |          19 | HC-SR04 `TRIG`                  | `D32`                    |          32 | right motor direction 2                  |
+| `D21`                   |          21 | I²C `SDA`                       | `D35`                    |          35 | right encoder                            |
+| `RX0`                   |           3 | unused; USB serial              | `D34`                    |          34 | left encoder                             |
+| `TX0`                   |           1 | unused; USB serial              | `VN`                     |          39 | water sensor analog output               |
+| `D22`                   |          22 | I²C `SCL`                       | `VP`                     |          36 | MQ-4 analog output, through divider      |
+| `D23`                   |          23 | DHT22 data                      | `EN`                     |           — | reset/enable; do not connect peripherals |
 
----
+sabse confusing aliases:
 
-## ROVER — Step-by-Step Wiring
+| board label | firmware GPIO |
+| ----------- | ------------: |
+| `RX2`       |          `16` |
+| `TX2`       |          `17` |
+| `VP`        |          `36` |
+| `VN`        |          `39` |
 
-### Step 1: Power Rails on Breadboard
+`D34`, `D35`, `VP`, aur `VN` **input-only** hain. `D34` aur `D35` mein internal pull-up bhi nahi hai. `D2`, `D5`, `D12`, aur `D15` boot-sensitive hain. [Espressif GPIO documentation](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/gpio.html)
 
-1. Run a **red wire** from the 5V bus to the breadboard's **+** rail (top)
-2. Run a **black wire** from the GND bus to the breadboard's **−** rail (top)
-3. Bridge the top and bottom power rails with jumper wires (red + to +, black − to −)
-4. Plug the **ESP32** into the breadboard, centered, straddling the middle gap
-5. Connect ESP32 **VIN** → breadboard **+5V rail**
-6. Connect ESP32 **GND** (any GND pin) → breadboard **GND rail**
-7. Place the **470µF electrolytic capacitor** across the +5V and GND rails. **Long leg (+) to +5V, short leg (−) to GND**
-
-> The ESP32's `3V3` output pin now provides 3.3V for logic-level sensors.
-
-### Step 2: DHT22 Temperature + Humidity Sensor
-
-```
-DHT22 Module (3-pin):
-    VCC  →  ESP32 3V3
-    GND  →  GND rail
-    DATA →  ESP32 GPIO 23
-
-If using bare 4-pin DHT22:
-    Pin 1 (VCC) →  ESP32 3V3
-    Pin 2 (DATA) → ESP32 GPIO 23
-    Pin 3         (not connected)
-    Pin 4 (GND)  → GND rail
-    + 10kΩ resistor between Pin 1 (VCC/3V3) and Pin 2 (DATA)
-```
-
-### Step 3: MQ-4 Gas Sensor (with Voltage Divider)
-
-The MQ-4 module outputs 0–5V on AO. ESP32 GPIO34 max is 3.3V. The voltage divider scales 5V down to 3.0V.
-
-```
-MQ-4 Module:
-    VCC  →  5V bus (NOT 3V3!)
-    GND  →  GND rail
-    AO   →  [10kΩ resistor] → junction point → ESP32 GPIO 34
-                                    │
-                               [15kΩ resistor]
-                                    │
-                                  GND rail
-
-Voltage at junction = 5V × 15k/(10k+15k) = 3.0V max ← safe
-```
-
-**Wiring on breadboard:**
-1. MQ-4 AO pin → one end of 10kΩ resistor (Row A)
-2. Other end of 10kΩ → junction row (Row B)
-3. From junction row (Row B) → jumper wire to ESP32 GPIO34
-4. From junction row (Row B) → one end of 15kΩ resistor
-5. Other end of 15kΩ → GND rail
-
-### Step 4: HC-SR04 Ultrasonic Sensor (with Voltage Divider)
-
-```
-HC-SR04:
-    VCC  →  5V bus
-    GND  →  GND rail
-    TRIG →  ESP32 GPIO 19 (direct, 3.3V trigger is accepted by HC-SR04)
-    ECHO →  [10kΩ resistor] → junction → ESP32 GPIO 18
-                                   │
-                              [15kΩ resistor]
-                                   │
-                                 GND rail
-
-Voltage at junction = 5V × 15k/(10k+15k) = 3.0V max ← safe
-```
-
-Identical divider circuit to the MQ-4. Build it the same way on the breadboard.
-
-### Step 5: MPU6050 IMU (I2C Bus)
-
-```
-MPU6050 GY-521:
-    VCC  →  ESP32 3V3
-    GND  →  GND rail
-    SDA  →  ESP32 GPIO 21
-    SCL  →  ESP32 GPIO 22
-    (AD0, INT, XDA, XCL — leave unconnected)
-```
-
-No external pull-ups needed — the GY-521 module has 4.7kΩ pull-ups onboard.
-
-### Step 6: VL53L0X ToF Sensor (I2C Bus — Shared with MPU6050)
-
-```
-VL53L0X GY-VL53L0XV2:
-    VIN  →  ESP32 3V3
-    GND  →  GND rail
-    SDA  →  ESP32 GPIO 21  (same wire/row as MPU6050 SDA)
-    SCL  →  ESP32 GPIO 22  (same wire/row as MPU6050 SCL)
-    (XSHUT, GPIO1 — leave unconnected)
-```
-
-Both I2C devices share the same SDA/SCL lines. They have different addresses (MPU=0x68, VL53=0x29) so there's no conflict. Both modules have onboard pull-ups.
-
-> **Mount the VL53L0X on the SG90 servo horn** using double-sided tape or a small bracket. The servo sweeps 30°–150°, and the VL53L0X scans distances at each angle.
-
-### Step 7: LM393 Speed Sensors (Wheel Encoders)
-
-```
-Left Speed Sensor:
-    VCC  →  ESP32 3V3
-    GND  →  GND rail
-    DO   →  ESP32 GPIO 32
-
-Right Speed Sensor:
-    VCC  →  ESP32 3V3
-    GND  →  GND rail
-    DO   →  ESP32 GPIO 35
-    + 10kΩ pull-up resistor between ESP32 3V3 and GPIO 35
-      (GPIO35 is input-only, has no internal pull-up)
-```
-
-**Mounting:** Attach the slotted encoder disc to one of the motor shafts on each side. Position the LM393 sensor so the disc's slots pass through the sensor's optical gap. Use hot glue or zip ties to secure.
-
-### Step 8: Water Level Sensor
-
-```
-Water Level Sensor:
-    VCC  →  ESP32 3V3  (NOT 5V — keeps output within 0–3.3V)
-    GND  →  GND rail
-    SIG  →  ESP32 GPIO 36 (VP)
-```
-
-### Step 9: SG90 Scanning Servo
-
-```
-SG90 Servo (3 wires):
-    Brown wire (GND)    →  GND rail
-    Red wire (V+)       →  5V bus (NOT through ESP32)
-    Orange wire (Signal) →  ESP32 GPIO 13
-```
-
-> Power the servo from the 5V bus, not the ESP32's 5V pin. Servo stall current can reach 700mA.
-
-### Step 10: Buzzer
-
-```
-Buzzer:
-    (+) positive pin  →  [220Ω resistor]  →  ESP32 GPIO 4
-    (−) negative pin  →  GND rail
-```
-
-### Step 11: Status LEDs
-
-```
-Red LED (Danger):
-    Anode (long leg)   →  [220Ω resistor]  →  ESP32 GPIO 26
-    Cathode (short leg) →  GND rail
-
-Green LED (Normal):
-    Anode (long leg)   →  [220Ω resistor]  →  ESP32 GPIO 27
-    Cathode (short leg) →  GND rail
-```
-
-### Step 12: TB6612FNG Motor Driver
-
-```
-TB6612FNG Module:
-    VM    →  5V bus (motor power)
-    VCC   →  ESP32 3V3 (logic reference voltage)
-    GND   →  GND rail (both GND pins)
-    STBY  →  ESP32 GPIO 5 (HIGH = enabled)
-
-    PWMA  →  ESP32 GPIO 25 (left motor speed PWM)
-    AIN1  →  ESP32 GPIO 16 (left direction)
-    AIN2  →  ESP32 GPIO 17 (left direction)
-    AO1   →  Left motors (+) terminal  ┐
-    AO2   →  Left motors (−) terminal  ┘ Front-Left and Rear-Left wired in parallel
-
-    PWMB  →  ESP32 GPIO 14 (right motor speed PWM)
-    BIN1  →  ESP32 GPIO 33 (right direction)
-    BIN2  →  ESP32 GPIO 2  (right direction) ⚠ see note below
-    BO1   →  Right motors (+) terminal  ┐
-    BO2   →  Right motors (−) terminal  ┘ Front-Right and Rear-Right wired in parallel
-```
-
-> Place a **100nF ceramic capacitor** across VCC and GND on the TB6612 module — solder it or tuck it into the breadboard next to the module.
-
-**Motor wiring — parallel pairs:**
-```
-        AO1 ───┬──→ Front-Left Motor (+)
-               └──→ Rear-Left Motor (+)
-
-        AO2 ───┬──→ Front-Left Motor (−)
-               └──→ Rear-Left Motor (−)
-
-        BO1 ───┬──→ Front-Right Motor (+)
-               └──→ Rear-Right Motor (+)
-
-        BO2 ───┬──→ Front-Right Motor (−)
-               └──→ Rear-Right Motor (−)
-```
-
-If the wheels spin the wrong direction, swap the (+) and (−) wires for that motor pair.
-
-### Step 13: Decoupling Capacitor on ESP32
-
-Place a **100nF ceramic capacitor** between ESP32 **3V3** pin and **GND** pin (any GND). This filters high-frequency noise from the motors reaching the ESP32's logic rail.
+**physical issue:** tumhari photo mein ESP32 par male header pins soldered nahi dikh rahe. jumper wires/breadboard ke liye **2×15 male header pins solder** karne honge.
 
 ---
 
-## ⚠ GPIO2 Boot Note
+## 3. rover ke chaar electrical rails
 
-GPIO2 (used for TB6612 BIN2) is a strapping pin. If the motor driver holds it HIGH during power-on, the ESP32 may fail to enter flash mode.
+wiring organize karne ke liye chaar named rails samjho:
 
-**If you cannot upload firmware:**
-1. Disconnect the jumper wire from GPIO2
-2. Flash the firmware via USB
-3. Reconnect the jumper wire
-4. Press the RST button on the ESP32
+| rail         | voltage                 | source                                   | connected components                                          |
+| ------------ | ----------------------- | ---------------------------------------- | ------------------------------------------------------------- |
+| `LOGIC_5V`   | 5.0 V                   | buck converter output                    | ESP32 `VIN`, MQ-4, HC-SR04, SG90, buzzer if 5 V               |
+| `LOGIC_3V3`  | approximately 3.3 V     | ESP32 `3V3` pin                          | DHT22, MPU6050, VL53L0X, encoders, water sensor, TB6612 logic |
+| `MOTOR_POS`  | approximately 4.8–5.6 V | 4×AA NiMH pack                           | both TB6612 `VM` pins                                         |
+| `COMMON_GND` | 0 V                     | logic-ground and motor-ground connection | ESP32, sensors, drivers, servo, both battery systems          |
 
-This only matters during flashing. Once the firmware is running, GPIO2 works fine as an output.
-
----
-
-## GATEWAY ESP32 — Complete Pin Map
-
-| GPIO | Direction | Connected To | Wire Color |
-|---|---|---|---|
-| **5V** | Power Out | LCD VCC | Red |
-| **GND** | Power | LCD GND + all LED cathodes | Black |
-| **21** | I2C SDA | LCD SDA | Green |
-| **22** | I2C SCL | LCD SCL | Blue |
-| **26** | Output | Red LED anode via 220Ω | Red |
-| **27** | Output | Green LED anode via 220Ω | Green |
-| **25** | Output | Yellow LED anode via 220Ω | Orange |
+`LOGIC_5V` aur `MOTOR_POS` ko **aapas mein connect mat karna**.
 
 ---
 
-## GATEWAY — Step-by-Step Wiring
+## 4. 2×18650 logic battery, BMS, buck converter
 
-The Gateway is powered entirely by the laptop USB cable. No external power needed.
+### 4.1 2S battery configuration
 
-### Step 1: LCD 16×2 (I2C)
+2 lithium cells series mein:
 
-```
-LCD I2C Module (4-pin header on the backpack):
-    GND  →  ESP32 GND
-    VCC  →  ESP32 5V
-    SDA  →  ESP32 GPIO 21
-    SCL  →  ESP32 GPIO 22
-```
+| battery connection                                  | destination                                   |
+| --------------------------------------------------- | --------------------------------------------- |
+| first cell negative                                 | BMS `B-`                                      |
+| first cell positive                                 | second cell negative                          |
+| first-cell-positive / second-cell-negative junction | BMS `B1`, `BM`, or equivalent middle terminal |
+| second cell positive                                | BMS `B+`                                      |
 
-> If the LCD shows blocks or is blank, use a small screwdriver to turn the **blue potentiometer** on the back of the I2C backpack. This adjusts contrast.
+typical 2S pack voltage:
 
-### Step 2: Status LEDs
+| battery state            | approximate voltage |
+| ------------------------ | ------------------: |
+| fully charged            |               8.4 V |
+| nominal                  |               7.4 V |
+| significantly discharged | approximately 6–7 V |
 
-```
-Red LED (Danger):
-    Anode (long leg)   →  [220Ω resistor]  →  ESP32 GPIO 26
-    Cathode (short leg) →  GND
+**important:** exact BMS labels model-dependent hote hain. `B-`, middle-cell connection, aur `B+` verify kiye bina connect mat karna.
 
-Green LED (Normal):
-    Anode (long leg)   →  [220Ω resistor]  →  ESP32 GPIO 27
-    Cathode (short leg) →  GND
+### 4.2 BMS output to buck converter
 
-Yellow LED (Heartbeat):
-    Anode (long leg)   →  [220Ω resistor]  →  ESP32 GPIO 25
-    Cathode (short leg) →  GND
-```
+| from                                                | to                   | note                   |
+| --------------------------------------------------- | -------------------- | ---------------------- |
+| BMS `P+`, or designated protected positive terminal | switch input         | optional master switch |
+| switch output                                       | buck converter `IN+` | logic supply positive  |
+| BMS `P-`                                            | buck converter `IN-` | protected logic ground |
+| buck converter `OUT+`                               | `LOGIC_5V` rail      | adjust to 5.0 V        |
+| buck converter `OUT-`                               | `COMMON_GND`         | common ground          |
 
-That's it for the Gateway. Plug it into the laptop via USB and you're live.
+agar switch nahi hai, BMS protected positive directly buck `IN+` par connect hoga.
 
----
+**BMS `B-` ko directly load ground ki tarah use mat karna** jab BMS ka designated output `P-` ho. warna protection bypass ho sakti hai.
 
-## COMPLETE SYSTEM DIAGRAM
+### 4.3 buck converter adjustment
 
-```
-                    ┌─────────── MINE ───────────┐
-                    │                             │
-                    │    ┌─── ROVER ESP32 ───┐    │
-                    │    │                   │    │
- ┌──────────────┐   │    │  DHT22  → GPIO23  │    │
- │ 10000mAh     │   │    │  MQ-4   → GPIO34  │    │
- │ Power Bank   │───┼───→│  HC-SR04→ GPIO18  │    │
- │ (5V / 2A+)   │   │    │  MPU6050→ I2C     │    │
- └──────────────┘   │    │  VL53L0X→ I2C     │    │
-                    │    │  Encoders → 32,35  │    │
-                    │    │  Water  → GPIO36   │    │
-                    │    │  Servo  → GPIO13   │    │
-                    │    │  Motors → TB6612   │    │
-                    │    │  Buzzer → GPIO4    │    │
-                    │    │  LEDs   → 26,27    │    │
-                    │    │                   │    │
-                    │    │    ESP-NOW TX      │    │
-                    │    └───────┬────────────┘    │
-                    │            │                 │
-                    └────────────┼─────────────────┘
-                                 │
-                        ~200m wireless range
-                        (no WiFi router needed)
-                                 │
-                    ┌────────────┼─────────────────┐
-                    │            │   BASE DESK      │
-                    │    ┌───────▼────────────┐     │
-                    │    │  GATEWAY ESP32     │     │
-                    │    │                   │     │
-                    │    │  ESP-NOW RX       │     │
-                    │    │  16×2 LCD (I2C)   │     │
-                    │    │  Red/Green/Yellow  │     │
-                    │    │  LEDs             │     │
-                    │    │                   │     │
-                    │    └───────┬────────────┘     │
-                    │            │ USB Cable        │
-                    │            │ (data + power)   │
-                    │    ┌───────▼────────────┐     │
-                    │    │  LAPTOP            │     │
-                    │    │  Chrome Browser    │     │
-                    │    │  dashboard.html    │     │
-                    │    │  (Web Serial API)  │     │
-                    │    └───────────────────┘     │
-                    └─────────────────────────────┘
-```
+1. ESP32 aur sensors connect karne se pehle buck converter ko battery se power do.
+2. multimeter ko DC voltage mode par set karo.
+3. black probe `OUT-`, red probe `OUT+`.
+4. adjustment screw turn karke output **5.0 V** set karo.
+5. uske baad hi ESP32 `VIN` connect karo.
+
+| buck converter terminal | final connection              |
+| ----------------------- | ----------------------------- |
+| `IN+`                   | protected 2S battery positive |
+| `IN-`                   | protected 2S battery negative |
+| `OUT+`                  | rover `LOGIC_5V`              |
+| `OUT-`                  | rover `COMMON_GND`            |
+
+buck ideally **3 A-capable** hona chahiye because ESP32, MQ-4 heater, aur servo simultaneously current demand kar sakte hain.
+
+**8.4 V battery directly ESP32 `VIN` par mat lagana.**
+
+### 4.4 charging
+
+2S lithium pack ke liye **8.4 V CC/CV charger** chahiye, compatible 2S BMS ke saath.
+
+single-cell `TP4056` module ko complete 2S pack charge karne ke liye directly use nahi karna.
 
 ---
 
-## VOLTAGE DIVIDER REFERENCE
+## 5. 4×AA motor battery
 
-Both the HC-SR04 ECHO and MQ-4 AO use identical voltage dividers:
+| motor battery terminal | connect to        |
+| ---------------------- | ----------------- |
+| 4×AA pack positive     | left TB6612 `VM`  |
+| 4×AA pack positive     | right TB6612 `VM` |
+| 4×AA pack negative     | `COMMON_GND`      |
 
-```
-5V Signal ──── [10kΩ] ──── Junction ──── [15kΩ] ──── GND
-                              │
-                         ESP32 GPIO
-                     (reads 3.0V max)
+agar motor power switch hai:
 
-    V_out = V_in × R_lower / (R_upper + R_lower)
-    V_out = 5.0V × 15kΩ / (10kΩ + 15kΩ)
-    V_out = 5.0V × 0.60
-    V_out = 3.0V  ← safe for ESP32 (max 3.3V)
-```
+| from                   | to                          |
+| ---------------------- | --------------------------- |
+| motor battery positive | motor switch input          |
+| motor switch output    | both motor-driver `VM` pins |
+| motor battery negative | `COMMON_GND`                |
+
+**critical connection:**
+
+| wire                   | connection                  |
+| ---------------------- | --------------------------- |
+| motor battery negative | buck `OUT-` / ESP32 `GND`   |
+| motor battery positive | only both motor-driver `VM` |
+| buck `OUT+`            | only `LOGIC_5V`             |
+
+motor battery positive aur buck 5 V positive alag rahenge.
+
+motor supply wires soldered connections ya screw terminals se distribute karo. chaar motors ka current ordinary breadboard rail se pass karna reliable nahi hai.
 
 ---
 
-## MOTOR DIRECTION TRUTH TABLE (TB6612FNG)
+## 6. ESP32 power connections
 
-| IN1 | IN2 | PWM | Motor Action |
-|---|---|---|---|
-| HIGH | LOW | 0–255 | Forward (speed = PWM duty) |
-| LOW | HIGH | 0–255 | Reverse (speed = PWM duty) |
-| HIGH | HIGH | 255 | Short brake (motor locked) |
-| LOW | LOW | any | Coast (free spin) |
+| ESP32 printed pin | connect to                         |
+| ----------------- | ---------------------------------- |
+| `VIN`             | buck converter `OUT+`, exactly 5 V |
+| either `GND`      | buck converter `OUT-`              |
+| either `GND`      | motor battery negative             |
+| `3V3`             | 3.3 V components ki common supply  |
 
-STBY must be HIGH for the driver to operate. STBY LOW = all outputs disabled (standby mode).
+`VIN` aur USB-C se board ko simultaneously power mat karo unless tumhare specific board ki power-path protection verified ho.
+
+program upload karte waqt safer sequence:
+
+1. buck ka `VIN` connection temporarily disconnect karo.
+2. USB-C se firmware upload karo.
+3. USB disconnect karo.
+4. buck ka 5 V output wapas `VIN` se connect karo.
 
 ---
 
-## FIRST POWER-ON CHECKLIST
+## 7. left TB6612FNG: left-front + left-rear
 
-Before applying power, verify:
+is board ke channel A aur B ko same left-side control signals milenge, lekin **har motor apne separate channel** par rahegi.
 
+| left driver pin | ESP32 board label / destination | actual GPIO |
+| --------------- | ------------------------------- | ----------: |
+| `VCC`           | ESP32 `3V3`                     |           — |
+| `VM`            | 4×AA motor battery positive     |           — |
+| `GND`           | `COMMON_GND`                    |           — |
+| `STBY`          | ESP32 `3V3`                     |           — |
+| `PWMA`          | ESP32 `D25`                     |          25 |
+| `AIN1`          | ESP32 `D14`                     |          14 |
+| `AIN2`          | ESP32 `RX2`                     |          16 |
+| `AO1` / `A01`   | left-front motor terminal 1     |           — |
+| `AO2` / `A02`   | left-front motor terminal 2     |           — |
+| `PWMB`          | ESP32 `D25`                     |          25 |
+| `BIN1`          | ESP32 `D14`                     |          14 |
+| `BIN2`          | ESP32 `RX2`                     |          16 |
+| `BO1` / `B01`   | left-rear motor terminal 1      |           — |
+| `BO2` / `B02`   | left-rear motor terminal 2      |           — |
+
+matlab physically:
+
+| ESP32 pin | fan-out                     |
+| --------- | --------------------------- |
+| `D25`     | left-driver `PWMA` + `PWMB` |
+| `D14`     | left-driver `AIN1` + `BIN1` |
+| `RX2`     | left-driver `AIN2` + `BIN2` |
+
+---
+
+## 8. right TB6612FNG: right-front + right-rear
+
+| right driver pin | ESP32 board label / destination | actual GPIO |
+| ---------------- | ------------------------------- | ----------: |
+| `VCC`            | ESP32 `3V3`                     |           — |
+| `VM`             | 4×AA motor battery positive     |           — |
+| `GND`            | `COMMON_GND`                    |           — |
+| `STBY`           | ESP32 `3V3`                     |           — |
+| `PWMA`           | ESP32 `TX2`                     |          17 |
+| `AIN1`           | ESP32 `D33`                     |          33 |
+| `AIN2`           | ESP32 `D32`                     |          32 |
+| `AO1` / `A01`    | right-front motor terminal 1    |           — |
+| `AO2` / `A02`    | right-front motor terminal 2    |           — |
+| `PWMB`           | ESP32 `TX2`                     |          17 |
+| `BIN1`           | ESP32 `D33`                     |          33 |
+| `BIN2`           | ESP32 `D32`                     |          32 |
+| `BO1` / `B01`    | right-rear motor terminal 1     |           — |
+| `BO2` / `B02`    | right-rear motor terminal 2     |           — |
+
+physically:
+
+| ESP32 pin | fan-out                      |
+| --------- | ---------------------------- |
+| `TX2`     | right-driver `PWMA` + `PWMB` |
+| `D33`     | right-driver `AIN1` + `BIN1` |
+| `D32`     | right-driver `AIN2` + `BIN2` |
+
+**important distinction:**
+
+* `VCC` = driver logic supply = **3.3 V**.
+* `VM` = motor supply = **motor battery voltage**.
+* `STBY` = **3.3 V**, otherwise driver remains disabled.
+
+driver inputs internally pulled down hote hain, aur TB6612 mein channel-specific current handling hoti hai. har motor ko separate channel dena correct arrangement hai. [Toshiba TB6612FNG datasheet](https://toshiba.semicon-storage.com/info/docget.jsp?did=10660)
+
+---
+
+## 9. four TT motors
+
+| motor       | driver       | driver channel | motor wires   |
+| ----------- | ------------ | -------------- | ------------- |
+| left-front  | left TB6612  | channel A      | `AO1` + `AO2` |
+| left-rear   | left TB6612  | channel B      | `BO1` + `BO2` |
+| right-front | right TB6612 | channel A      | `AO1` + `AO2` |
+| right-rear  | right TB6612 | channel B      | `BO1` + `BO2` |
+
+TT motor ke dono terminals par koi fixed universal polarity nahi hoti. agar forward command par koi ek wheel reverse ghoom raha hai, **sirf us wheel ke dono motor wires interchange** kar do.
+
+encoder discs ek left wheel aur ek right wheel par mount karo.
+
+---
+
+## 10. DHT22 temperature/humidity sensor
+
+### three-pin module
+
+| DHT22 module pin     | connect to   |
+| -------------------- | ------------ |
+| `VCC` / `+`          | ESP32 `3V3`  |
+| `DATA` / `OUT` / `S` | ESP32 `D23`  |
+| `GND` / `−`          | `COMMON_GND` |
+
+firmware pin: `GPIO23`.
+
+three-pin module mein pull-up generally already installed hota hai.
+
+### bare four-pin DHT22
+
+agar bare sensor hai:
+
+| DHT22 pin | connect to   |
+| --------- | ------------ |
+| `VCC`     | ESP32 `3V3`  |
+| `DATA`    | ESP32 `D23`  |
+| `NC`      | disconnected |
+| `GND`     | `COMMON_GND` |
+
+additional resistor:
+
+| resistor | first end      | second end  |
+| -------- | -------------- | ----------- |
+| 10 kΩ    | `DATA` / `D23` | ESP32 `3V3` |
+
+---
+
+## 11. MQ-4 methane sensor
+
+tumhara MQ-4 four-pin module hai.
+
+| MQ-4 pin | connect to                   |
+| -------- | ---------------------------- |
+| `VCC`    | `LOGIC_5V`                   |
+| `GND`    | `COMMON_GND`                 |
+| `AO`     | 10 kΩ upper divider resistor |
+| `DO`     | disconnected                 |
+
+### MQ-4 voltage divider
+
+| connection  | exact wiring                                |
+| ----------- | ------------------------------------------- |
+| resistor 1  | MQ-4 `AO` → **10 kΩ** → divider junction    |
+| ESP32 input | divider junction → ESP32 `VP`               |
+| resistor 2  | divider junction → **15 kΩ** → `COMMON_GND` |
+
+`VP` firmware mein `GPIO36` hai.
+
+divider output:
+
+[
+V_{\text{ESP32}} =
+V_{\text{MQ4}}
+\times
+\frac{15,000}{10,000 + 15,000}
+]
+
+agar MQ-4 output 5 V hua:
+
+[
+5.0 \times \frac{15}{25} = 3.0\text{ V}
+]
+
+isliye ESP32 input safe range mein rahega.
+
+**MQ-4 `AO` ko `VP` se directly connect mat karna.**
+
+MQ-4 ko warm-up chahiye, aur bina proper calibration ke reading ko accurate methane ppm mat samajhna.
+
+---
+
+## 12. HC-SR04 ultrasonic sensor
+
+| HC-SR04 pin | connect to                   |
+| ----------- | ---------------------------- |
+| `VCC`       | `LOGIC_5V`                   |
+| `GND`       | `COMMON_GND`                 |
+| `TRIG`      | ESP32 `D19`                  |
+| `ECHO`      | 10 kΩ upper divider resistor |
+
+### HC-SR04 `ECHO` divider
+
+| connection  | exact wiring                                  |
+| ----------- | --------------------------------------------- |
+| resistor 1  | HC-SR04 `ECHO` → **10 kΩ** → divider junction |
+| ESP32 input | divider junction → ESP32 `D18`                |
+| resistor 2  | divider junction → **15 kΩ** → `COMMON_GND`   |
+
+firmware:
+
+| signal | GPIO |
+| ------ | ---: |
+| `TRIG` |   19 |
+| `ECHO` |   18 |
+
+`ECHO` direct connect karoge to approximately 5 V ESP32 GPIO par ja sakta hai.
+
+HC-SR04 chassis ke front mein fixed position par mount karo.
+
+---
+
+## 13. divider junction physically kya hota hai
+
+har divider junction mein **teen connections ek hi electrical point** par milenge.
+
+### MQ-4 junction
+
+| junction par connected items                        |
+| --------------------------------------------------- |
+| MQ-4 `AO` se aane wale 10 kΩ resistor ka second end |
+| ESP32 `VP` ki signal wire                           |
+| `GND` jaane wale 15 kΩ resistor ka first end        |
+
+### HC-SR04 junction
+
+| junction par connected items                     |
+| ------------------------------------------------ |
+| `ECHO` se aane wale 10 kΩ resistor ka second end |
+| ESP32 `D18` ki signal wire                       |
+| `GND` jaane wale 15 kΩ resistor ka first end     |
+
+breadboard par ye teen legs **same connected row** mein lagenge. soldered build mein teenon ek common solder point par join honge.
+
+resistors non-polarized hote hain: unki direction matter nahi karti.
+
+---
+
+## 14. MPU6050 GY-521
+
+| MPU6050 pin | connect to                     |
+| ----------- | ------------------------------ |
+| `VCC`       | ESP32 `3V3`                    |
+| `GND`       | `COMMON_GND`                   |
+| `SDA`       | ESP32 `D21`                    |
+| `SCL`       | ESP32 `D22`                    |
+| `AD0`       | `GND`, or existing default low |
+| `INT`       | disconnected                   |
+| `XDA`       | disconnected                   |
+| `XCL`       | disconnected                   |
+
+expected I²C address:
+
+```text
+0x68
 ```
-[ ] 470µF cap on 5V bus (correct polarity — long leg to +5V)
-[ ] 100nF cap on ESP32 3V3-GND
-[ ] 100nF cap on TB6612 VCC-GND
-[ ] MQ-4 VCC on 5V bus (NOT 3V3)
-[ ] MQ-4 AO goes through 10k/15k divider to GPIO34 (NOT direct)
-[ ] HC-SR04 ECHO goes through 10k/15k divider to GPIO18 (NOT direct)
-[ ] HC-SR04 VCC on 5V bus
-[ ] Servo V+ on 5V bus (NOT ESP32 5V pin)
-[ ] TB6612 VM on 5V bus
-[ ] All GND wires connected to the same GND bus
-[ ] No bare wire ends touching each other
-[ ] DHT22 on 3V3 (not 5V)
-[ ] Water sensor on 3V3 (not 5V)
-[ ] LED resistors (220Ω) are present (no direct GPIO → LED)
+
+agar tumhare particular GY-521 board ka regulator 3.3 V input par reliable nahi hai, module ko 5 V par tabhi power karna jab multimeter se confirm ho ki uske `SDA` aur `SCL` idle voltage **3.3 V se upar nahi** ja rahe.
+
+---
+
+## 15. VL53L0X distance sensor
+
+| VL53L0X pin                 | connect to                                                             |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `VIN` / `VCC`               | ESP32 `3V3`                                                            |
+| `GND`                       | `COMMON_GND`                                                           |
+| `SDA`                       | ESP32 `D21`                                                            |
+| `SCL`                       | ESP32 `D22`                                                            |
+| `XSHUT`, if present         | default state; disconnected unless module documentation says otherwise |
+| `GPIO1` / `INT`, if present | disconnected                                                           |
+
+expected Arduino I²C address:
+
+```text
+0x29
 ```
 
-> **MQ-4 warm-up:** The MQ-4 sensor needs 24–48 hours of continuous power for the heater to stabilize on first use. Readings in the first few minutes will be unreliable. For the hackathon demo, power it on as early as possible.
+datasheets kabhi `0x52` dikhate hain because woh shifted address representation hota hai; Arduino I²C scanner mein normally **`0x29`** dikhega. [ST VL53L0X datasheet](https://www.st.com/resource/en/datasheet/vl53l0x.pdf)
+
+VL53L0X ko SG90 servo horn par mount karo.
+
+---
+
+## 16. MPU6050 aur VL53L0X shared I²C bus
+
+| ESP32 pin | first connection | second connection |
+| --------- | ---------------- | ----------------- |
+| `D21`     | MPU6050 `SDA`    | VL53L0X `SDA`     |
+| `D22`     | MPU6050 `SCL`    | VL53L0X `SCL`     |
+| `3V3`     | MPU6050 `VCC`    | VL53L0X `VIN`     |
+| `GND`     | MPU6050 `GND`    | VL53L0X `GND`     |
+
+dono sensors same wires share kar sakte hain because addresses different hain:
+
+| device  | I²C address |
+| ------- | ----------- |
+| MPU6050 | `0x68`      |
+| VL53L0X | `0x29`      |
+
+normally breakout boards par I²C pull-ups already hote hain. agar bilkul pull-ups nahi hain, add:
+
+| resistor | connect between         |
+| -------- | ----------------------- |
+| 4.7 kΩ   | `D21` / `SDA` and `3V3` |
+| 4.7 kΩ   | `D22` / `SCL` and `3V3` |
+
+ye extra resistors tabhi required hain jab modules mein onboard pull-ups absent hon.
+
+---
+
+## 17. left LM393 wheel encoder
+
+| left encoder pin | connect to   |
+| ---------------- | ------------ |
+| `VCC`            | ESP32 `3V3`  |
+| `GND`            | `COMMON_GND` |
+| `DO` / `OUT`     | ESP32 `D34`  |
+| `AO`, if present | disconnected |
+
+external pull-up:
+
+| resistor | first end            | second end  |
+| -------- | -------------------- | ----------- |
+| 10 kΩ    | `D34` / encoder `DO` | ESP32 `3V3` |
+
+firmware pin: `GPIO34`.
+
+---
+
+## 18. right LM393 wheel encoder
+
+| right encoder pin | connect to   |
+| ----------------- | ------------ |
+| `VCC`             | ESP32 `3V3`  |
+| `GND`             | `COMMON_GND` |
+| `DO` / `OUT`      | ESP32 `D35`  |
+| `AO`, if present  | disconnected |
+
+external pull-up:
+
+| resistor | first end            | second end  |
+| -------- | -------------------- | ----------- |
+| 10 kΩ    | `D35` / encoder `DO` | ESP32 `3V3` |
+
+firmware pin: `GPIO35`.
+
+LM393 output open-collector hota hai, isliye valid HIGH signal ke liye pull-up required hota hai. kuch modules mein pull-up already installed hota hai, lekin `D34` / `D35` mein ESP32 ka internal pull-up nahi hota. [Texas Instruments LM393 application guide](https://www.ti.com/lit/pdf/snoaa35)
+
+**encoder modules ko 5 V se power mat karo** unless tumne output level separately safe banaya ho. 3.3 V supply se `DO` output ESP32-compatible rahega.
+
+encoder disc aur optical slot properly align karo. module ka adjustment potentiometer rotate karke indicator LED ko slots ke saath toggle karwao.
+
+---
+
+## 19. water-level sensor
+
+| water sensor pin | connect to   |
+| ---------------- | ------------ |
+| `+` / `VCC`      | ESP32 `3V3`  |
+| `−` / `GND`      | `COMMON_GND` |
+| `S` / `SIG`      | ESP32 `VN`   |
+
+`VN` = **`GPIO39`**.
+
+| board label | code             |
+| ----------- | ---------------- |
+| `VN`        | `analogRead(39)` |
+
+sensor ko 5 V supply doge aur signal directly `VN` par connect karoge to ESP32 overvoltage risk hoga. is design mein supply **3.3 V** hi rakho.
+
+---
+
+## 20. SG90 servo
+
+| SG90 wire color         | connect to   |
+| ----------------------- | ------------ |
+| brown / black           | `COMMON_GND` |
+| red                     | `LOGIC_5V`   |
+| orange / yellow / white | ESP32 `D13`  |
+
+firmware pin: `GPIO13`.
+
+servo ka 5 V connection buck converter output se aayega. servo ko ESP32 `3V3` pin se power mat karo.
+
+servo ko physically VL53L0X sensor ke saath mount karo.
+
+---
+
+## 21. rover red LED
+
+| LED connection               | destination                 |
+| ---------------------------- | --------------------------- |
+| ESP32 `D26`                  | 220 Ω resistor ka first end |
+| 220 Ω resistor ka second end | red LED long leg / anode    |
+| red LED short leg / cathode  | `COMMON_GND`                |
+
+firmware pin: `GPIO26`.
+
+---
+
+## 22. rover green LED
+
+| LED connection                | destination                 |
+| ----------------------------- | --------------------------- |
+| ESP32 `D27`                   | 220 Ω resistor ka first end |
+| 220 Ω resistor ka second end  | green LED long leg / anode  |
+| green LED short leg / cathode | `COMMON_GND`                |
+
+firmware pin: `GPIO27`.
+
+**har LED ka apna resistor hona chahiye.**
+
+---
+
+## 23. active buzzer
+
+yahan do possible hardware variants hain.
+
+### case A: three-pin active-buzzer module
+
+agar module par `VCC`, `GND`, aur `S` / `IN` printed hai:
+
+| buzzer module pin | connect to                                       |
+| ----------------- | ------------------------------------------------ |
+| `VCC`             | module rating ke according `3V3` or `LOGIC_5V`   |
+| `GND`             | `COMMON_GND`                                     |
+| `S` / `IN`        | ESP32 `D4`, only if module accepts 3.3 V control |
+
+firmware pin: `GPIO4`.
+
+agar signal pin 5 V par pull-up hota hai, usse ESP32 par directly connect nahi karna.
+
+### case B: two-pin 5 V active buzzer
+
+safe wiring ke liye additional components:
+
+| extra component                               |                                 quantity |
+| --------------------------------------------- | ---------------------------------------: |
+| NPN transistor: `2N2222`, `BC547`, or `S8050` |                                        1 |
+| 1 kΩ resistor                                 |                                        1 |
+| diode `1N4148` / `1N4007`                     | 1 if buzzer is inductive/electromagnetic |
+
+connections:
+
+| component terminal                 | connect to                        |
+| ---------------------------------- | --------------------------------- |
+| buzzer `+`                         | `LOGIC_5V`                        |
+| buzzer `−`                         | transistor collector              |
+| transistor emitter                 | `COMMON_GND`                      |
+| transistor base                    | 1 kΩ resistor                     |
+| 1 kΩ resistor other end            | ESP32 `D4`                        |
+| diode striped end, if required     | buzzer `+` / `LOGIC_5V`           |
+| diode non-striped end, if required | buzzer `−` / transistor collector |
+
+**correction:** earlier jo `GPIO4 → 220 Ω → active buzzer` bataya tha, woh every 5 V active buzzer ke liye proper universal solution nahi hai. two-pin 5 V active buzzer ke liye transistor driver safer arrangement hai.
+
+transistor ki physical leg order exact model par depend karegi; `BC547`, `2N2222`, aur `S8050` ka pinout interchangeably assume mat karna.
+
+---
+
+## 24. complete capacitor placement
+
+tumhare existing capacitors:
+
+| capacitor           | quantity |
+| ------------------- | -------: |
+| 470 µF electrolytic |        2 |
+| 100 nF ceramic      |        3 |
+
+### capacitor 1: logic 5 V rail
+
+| capacitor terminal  | connect to   |
+| ------------------- | ------------ |
+| 470 µF positive leg | `LOGIC_5V`   |
+| 470 µF negative leg | `COMMON_GND` |
+
+isko buck output aur servo power connection ke near lagao.
+
+### capacitor 2: motor rail
+
+| capacitor terminal  | connect to                     |
+| ------------------- | ------------------------------ |
+| 470 µF positive leg | `MOTOR_POS` / both TB6612 `VM` |
+| 470 µF negative leg | `COMMON_GND`                   |
+
+isko motor-driver power input ke near lagao.
+
+### capacitor 3: left driver logic
+
+| capacitor terminal    | connect to        |
+| --------------------- | ----------------- |
+| 100 nF ceramic side 1 | left TB6612 `VCC` |
+| 100 nF ceramic side 2 | left TB6612 `GND` |
+
+### capacitor 4: right driver logic
+
+| capacitor terminal    | connect to         |
+| --------------------- | ------------------ |
+| 100 nF ceramic side 1 | right TB6612 `VCC` |
+| 100 nF ceramic side 2 | right TB6612 `GND` |
+
+### capacitor 5: ESP32 3.3 V rail
+
+| capacitor terminal    | connect to  |
+| --------------------- | ----------- |
+| 100 nF ceramic side 1 | ESP32 `3V3` |
+| 100 nF ceramic side 2 | ESP32 `GND` |
+
+### identifying capacitor polarity
+
+| component           | polarity                              |
+| ------------------- | ------------------------------------- |
+| 470 µF electrolytic | polarized; striped side is negative   |
+| 100 nF ceramic      | non-polarized; either direction works |
+
+100 nF ceramic capacitor par often:
+
+```text
+104
+```
+
+printed hota hai.
+
+470 µF capacitor ka voltage rating ideally **16 V ya 25 V** ho.
+
+---
+
+## 25. resistor inventory and exact placement
+
+| resistor         |                    quantity | first connection                          | second connection                         |
+| ---------------- | --------------------------: | ----------------------------------------- | ----------------------------------------- |
+| 10 kΩ #1         |                           1 | MQ-4 `AO`                                 | MQ-4 divider junction / ESP32 `VP`        |
+| 15 kΩ #1         |                           1 | MQ-4 divider junction / ESP32 `VP`        | `COMMON_GND`                              |
+| 10 kΩ #2         |                           1 | HC-SR04 `ECHO`                            | ultrasonic divider junction / ESP32 `D18` |
+| 15 kΩ #2         |                           1 | ultrasonic divider junction / ESP32 `D18` | `COMMON_GND`                              |
+| 10 kΩ #3         |                           1 | left encoder output / `D34`               | `3V3`                                     |
+| 10 kΩ #4         |                           1 | right encoder output / `D35`              | `3V3`                                     |
+| 220 Ω #1         |                           1 | ESP32 `D26`                               | red rover LED long leg                    |
+| 220 Ω #2         |                           1 | ESP32 `D27`                               | green rover LED long leg                  |
+| additional 10 kΩ |         only for bare DHT22 | DHT22 `DATA`                              | `3V3`                                     |
+| additional 1 kΩ  | only for two-pin 5 V buzzer | ESP32 `D4`                                | NPN transistor base                       |
+
+common four-band resistor colors:
+
+| resistor | typical color bands        |
+| -------- | -------------------------- |
+| 220 Ω    | red, red, brown, gold      |
+| 1 kΩ     | brown, black, red, gold    |
+| 10 kΩ    | brown, black, orange, gold |
+| 15 kΩ    | brown, green, orange, gold |
+
+gold band usually tolerance band hoti hai.
+
+agar colors unclear hon, multimeter resistance mode mein verify karo.
+
+---
+
+## 26. rover complete component-to-pin summary
+
+| component     | power                           | ground        | signal connections     | extra components                        |
+| ------------- | ------------------------------- | ------------- | ---------------------- | --------------------------------------- |
+| ESP32         | `VIN` ← regulated 5 V           | common ground | —                      | 100 nF across `3V3` / `GND`             |
+| DHT22         | `3V3`                           | common ground | `D23`                  | 10 kΩ only if bare sensor               |
+| MQ-4          | 5 V                             | common ground | `VP` / `GPIO36`        | 10 kΩ + 15 kΩ divider                   |
+| HC-SR04       | 5 V                             | common ground | `TRIG=D19`, `ECHO=D18` | 10 kΩ + 15 kΩ ECHO divider              |
+| MPU6050       | `3V3`                           | common ground | `SDA=D21`, `SCL=D22`   | normally none                           |
+| VL53L0X       | `3V3`                           | common ground | `SDA=D21`, `SCL=D22`   | normally none                           |
+| left encoder  | `3V3`                           | common ground | `D34`                  | 10 kΩ pull-up                           |
+| right encoder | `3V3`                           | common ground | `D35`                  | 10 kΩ pull-up                           |
+| water sensor  | `3V3`                           | common ground | `VN` / `GPIO39`        | none                                    |
+| SG90          | 5 V                             | common ground | `D13`                  | 470 µF on 5 V rail                      |
+| red LED       | GPIO-powered                    | common ground | `D26`                  | 220 Ω                                   |
+| green LED     | GPIO-powered                    | common ground | `D27`                  | 220 Ω                                   |
+| active buzzer | 3.3 V / 5 V depending on module | common ground | `D4`                   | driver transistor if two-pin 5 V buzzer |
+| left TB6612   | `VCC=3V3`; `VM=motor battery`   | common ground | `D25`, `D14`, `RX2`    | 100 nF across `VCC` / `GND`             |
+| right TB6612  | `VCC=3V3`; `VM=motor battery`   | common ground | `TX2`, `D33`, `D32`    | 100 nF across `VCC` / `GND`             |
+
+---
+
+## 27. gateway ESP32 connections
+
+gateway separate board hai. laptop USB usse power aur serial communication provide karega.
+
+| gateway component           | connection                     |
+| --------------------------- | ------------------------------ |
+| gateway ESP32 USB           | laptop USB                     |
+| LCD `SDA`                   | gateway `GPIO21`               |
+| LCD `SCL`                   | gateway `GPIO22`               |
+| red LED                     | gateway `GPIO25` through 220 Ω |
+| yellow LED                  | gateway `GPIO26` through 220 Ω |
+| green LED                   | gateway `GPIO27` through 220 Ω |
+| LCD ground and LED cathodes | gateway `GND`                  |
+
+gateway aur rover ke GPIO numbers overlap kar sakte hain because ye **alag ESP32 boards** hain.
+
+---
+
+## 28. gateway LCD: safest wiring
+
+ye wiring **four-pin I²C LCD backpack** ke liye hai.
+
+### option 1: LCD reliably works at 3.3 V
+
+| LCD pin | gateway ESP32 |
+| ------- | ------------- |
+| `VCC`   | `3V3`         |
+| `GND`   | `GND`         |
+| `SDA`   | `GPIO21`      |
+| `SCL`   | `GPIO22`      |
+
+ye electrically simple aur safe hai, but kuch 16×2 LCD modules 3.3 V par low contrast ya unreliable behavior dikha sakte hain.
+
+backpack ka contrast potentiometer adjust karna pad sakta hai.
+
+### option 2: LCD requires 5 V
+
+bidirectional I²C level shifter use karo:
+
+| level-shifter pin | connect to           |
+| ----------------- | -------------------- |
+| `LV`              | gateway `3V3`        |
+| `HV`              | gateway `5V` / `VIN` |
+| `GND`             | gateway `GND`        |
+| `LV1`             | gateway `GPIO21`     |
+| `HV1`             | LCD `SDA`            |
+| `LV2`             | gateway `GPIO22`     |
+| `HV2`             | LCD `SCL`            |
+
+LCD power:
+
+| LCD pin | connect to    |
+| ------- | ------------- |
+| `VCC`   | gateway `5V`  |
+| `GND`   | gateway `GND` |
+
+LCD I²C address usually:
+
+```text
+0x27
+```
+
+occasionally:
+
+```text
+0x3F
+```
+
+agar backpack `SDA` / `SCL` ko 5 V par pull-up karta hai, ESP32 ke saath direct connection unsafe hai.
+
+---
+
+## 29. gateway LEDs
+
+| LED    | gateway GPIO | exact wiring                                       |
+| ------ | -----------: | -------------------------------------------------- |
+| red    |         `25` | `GPIO25` → 220 Ω → LED long leg; short leg → `GND` |
+| yellow |         `26` | `GPIO26` → 220 Ω → LED long leg; short leg → `GND` |
+| green  |         `27` | `GPIO27` → 220 Ω → LED long leg; short leg → `GND` |
+
+### total LED resistor requirement
+
+| LEDs                         | 220 Ω resistors |
+| ---------------------------- | --------------: |
+| rover red + green            |               2 |
+| gateway red + yellow + green |               3 |
+| total                        |           **5** |
+
+agar tumhare paas total sirf **3×220 Ω** resistors hain, five LEDs simultaneously correct wiring ke liye **2 additional 220 Ω resistors** chahiye.
+
+---
+
+## 30. complete firmware pin definitions
+
+```cpp
+#pragma once
+
+#include <Arduino.h>
+
+namespace RoverPins {
+
+// Environmental sensors
+constexpr uint8_t DHT22 = 23;       // Board: D23
+constexpr uint8_t MQ4 = 36;        // Board: VP
+constexpr uint8_t WATER = 39;      // Board: VN
+
+// Fixed front ultrasonic sensor
+constexpr uint8_t ULTRASONIC_TRIG = 19;  // Board: D19
+constexpr uint8_t ULTRASONIC_ECHO = 18;  // Board: D18
+
+// Shared I2C bus
+constexpr uint8_t I2C_SDA = 21;    // Board: D21
+constexpr uint8_t I2C_SCL = 22;    // Board: D22
+
+// Wheel encoders
+constexpr uint8_t ENCODER_LEFT = 34;   // Board: D34
+constexpr uint8_t ENCODER_RIGHT = 35;  // Board: D35
+
+// Scanning servo
+constexpr uint8_t SERVO = 13;      // Board: D13
+
+// Rover indicators
+constexpr uint8_t BUZZER = 4;      // Board: D4
+constexpr uint8_t LED_RED = 26;    // Board: D26
+constexpr uint8_t LED_GREEN = 27;  // Board: D27
+
+// Left TB6612: front and rear channels share these signals
+constexpr uint8_t MOTOR_LEFT_PWM = 25;  // Board: D25
+constexpr uint8_t MOTOR_LEFT_IN1 = 14;  // Board: D14
+constexpr uint8_t MOTOR_LEFT_IN2 = 16;  // Board: RX2
+
+// Right TB6612: front and rear channels share these signals
+constexpr uint8_t MOTOR_RIGHT_PWM = 17;  // Board: TX2
+constexpr uint8_t MOTOR_RIGHT_IN1 = 33;  // Board: D33
+constexpr uint8_t MOTOR_RIGHT_IN2 = 32;  // Board: D32
+
+// Both driver STBY pins are wired directly to 3V3.
+// Therefore there is intentionally no STBY GPIO constant.
+
+constexpr uint8_t MPU6050_ADDRESS = 0x68;
+constexpr uint8_t VL53L0X_ADDRESS = 0x29;
+
+}  // namespace RoverPins
+
+namespace GatewayPins {
+
+constexpr uint8_t LCD_SDA = 21;
+constexpr uint8_t LCD_SCL = 22;
+
+constexpr uint8_t LED_RED = 25;
+constexpr uint8_t LED_YELLOW = 26;
+constexpr uint8_t LED_GREEN = 27;
+
+constexpr uint8_t LCD_ADDRESS = 0x27;
+
+}  // namespace GatewayPins
+```
+
+important initialization:
+
+```cpp
+#include <Wire.h>
+
+void setup() {
+  Wire.begin(RoverPins::I2C_SDA, RoverPins::I2C_SCL);
+
+  // GPIO34 and GPIO35 have no internal pull-ups.
+  // Use the external 10k resistors described above.
+  pinMode(RoverPins::ENCODER_LEFT, INPUT);
+  pinMode(RoverPins::ENCODER_RIGHT, INPUT);
+
+  // Configure analog channels for approximately 0–3.1 V.
+  analogSetPinAttenuation(RoverPins::MQ4, ADC_11db);
+  analogSetPinAttenuation(RoverPins::WATER, ADC_11db);
+
+  pinMode(RoverPins::ULTRASONIC_TRIG, OUTPUT);
+  pinMode(RoverPins::ULTRASONIC_ECHO, INPUT);
+
+  pinMode(RoverPins::LED_RED, OUTPUT);
+  pinMode(RoverPins::LED_GREEN, OUTPUT);
+  pinMode(RoverPins::BUZZER, OUTPUT);
+
+  pinMode(RoverPins::MOTOR_LEFT_IN1, OUTPUT);
+  pinMode(RoverPins::MOTOR_LEFT_IN2, OUTPUT);
+  pinMode(RoverPins::MOTOR_RIGHT_IN1, OUTPUT);
+  pinMode(RoverPins::MOTOR_RIGHT_IN2, OUTPUT);
+
+  digitalWrite(RoverPins::MOTOR_LEFT_IN1, LOW);
+  digitalWrite(RoverPins::MOTOR_LEFT_IN2, LOW);
+  digitalWrite(RoverPins::MOTOR_RIGHT_IN1, LOW);
+  digitalWrite(RoverPins::MOTOR_RIGHT_IN2, LOW);
+}
+```
+
+`ADC_11db` classic ESP32 par approximately **150 mV–3100 mV** measurement range support karta hai, jo MQ-4 divider ke approximately 3.0 V maximum ke saath suitable hai. [Arduino-ESP32 ADC documentation](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/adc.html)
+
+---
+
+## 31. components that may still be missing
+
+| component                                | kab required hai                                                            |
+| ---------------------------------------- | --------------------------------------------------------------------------- |
+| 2×15 male header pins                    | tumhare photographed ESP32 par jumper connections ke liye                   |
+| 2S BMS                                   | 2×18650 series battery safely use karne ke liye                             |
+| 8.4 V lithium charger                    | 2S battery charge karne ke liye                                             |
+| buck converter, approximately 3 A        | 2S battery ko stable 5 V mein convert karne ke liye                         |
+| additional 2×220 Ω resistors             | agar total five LEDs hain but currently only three resistors available hain |
+| NPN transistor + 1 kΩ resistor           | agar buzzer two-pin 5 V active buzzer hai                                   |
+| bidirectional I²C level shifter          | agar gateway LCD 5 V par hi reliably kaam karta hai                         |
+| optional 2×4.7 kΩ resistors              | agar MPU6050/VL53L0X modules mein onboard I²C pull-ups absent hain          |
+| switches                                 | optional logic-power and motor-power isolation                              |
+| soldering supplies / terminal connectors | motor-current wiring and secure assembly                                    |
+
+---
+
+## 32. first-power-on checklist
+
+1. **header pins solder karo** aur inspect karo ki adjacent pins short na hon.
+2. BMS battery connections verify karo: `B-`, middle connection, `B+`.
+3. buck output ko multimeter se **5.0 V** set karo.
+4. motor battery positive aur logic 5 V positive separate verify karo.
+5. motor battery negative aur ESP32 ground common verify karo.
+6. ESP32 `VIN` par approximately **5 V** confirm karo.
+7. ESP32 `3V3` pin par approximately **3.3 V** confirm karo.
+8. dono TB6612 `VCC` par approximately **3.3 V** confirm karo.
+9. dono TB6612 `STBY` par approximately **3.3 V** confirm karo.
+10. dono TB6612 `VM` par approximately **4.8–5.6 V** confirm karo.
+11. MQ-4 divider junction ko `VP` se connect karo; output **3.3 V se zyada** nahi hona chahiye.
+12. HC-SR04 `ECHO` direct GPIO se connected na ho; divider installed hona chahiye.
+13. encoders `D34` / `D35` par 10 kΩ pull-ups verify karo.
+14. water sensor power **3.3 V** verify karo.
+15. I²C scanner mein MPU6050 `0x68` aur VL53L0X `0x29` check karo.
+16. wheels ko surface se utha kar one-by-one motor direction test karo.
+17. servo test karo.
+18. gateway LCD aur LEDs test karo.
+19. ESP-NOW link establish karo.
+20. gateway disconnect karke confirm karo ki rover approximately **500 ms** ke andar motors stop/brake karta hai.

@@ -5,3 +5,8 @@
 *.elf
 *.hex
 .DS_Store
+
+# Credentials
+.env
+.env.*
+!.env.example

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="16" fill="#D1E4FF"/>
+  
+  <!-- Rover Armored Tracks / Wheels -->
+  <rect x="10" y="38" width="16" height="16" rx="5" fill="#001D36" stroke="#006B5F" stroke-width="2.5"/>
+  <line x1="10" y1="46" x2="26" y2="46" stroke="#59DBC7" stroke-width="2"/>
+  
+  <rect x="38" y="38" width="16" height="16" rx="5" fill="#001D36" stroke="#006B5F" stroke-width="2.5"/>
+  <line x1="38" y1="46" x2="54" y2="46" stroke="#59DBC7" stroke-width="2"/>
+  
+  <!-- Main Rover Hull -->
+  <path d="M16 26 L23 18 L41 18 L48 26 L45 42 L19 42 Z" fill="#0061A4" stroke="#FFFFFF" stroke-width="2.5" stroke-linejoin="round"/>
+  
+  <!-- Sensor Eyes & Optical Array -->
+  <circle cx="26" cy="31" r="3.5" fill="#59DBC7"/>
+  <circle cx="38" cy="31" r="3.5" fill="#59DBC7"/>
+  <rect x="28" y="35" width="8" height="2" rx="1" fill="#FFFFFF"/>
+  
+  <!-- Antenna & LiDAR Turret -->
+  <rect x="29" y="14" width="6" height="4" rx="1" fill="#001D36"/>
+  <circle cx="32" cy="12" r="5" fill="#BA1A1A" stroke="#FFFFFF" stroke-width="1.5"/>
+  <path d="M36 10 L48 5" stroke="#BA1A1A" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="2 3"/>
+</svg>

@@ -1,0 +1,35 @@
+{
+	"name": "dashboard",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json --watch"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-auto": "^7.0.1",
+		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"autoprefixer": "^10.5.4",
+		"axe-core": "^4.13.0",
+		"html-validate": "^11.10.0",
+		"jsdom": "^30.0.1",
+		"postcss": "^8.5.26",
+		"stylelint": "^17.14.1",
+		"stylelint-config-standard": "^40.0.0",
+		"svelte": "^5.56.1",
+		"svelte-check": "^4.6.0",
+		"tailwindcss": "^3.4.19",
+		"typescript": "^6.0.3",
+		"vite": "^8.0.16"
+	},
+	"dependencies": {
+		"@supabase/supabase-js": "^2.112.4",
+		"zod": "^4.4.3"
+	}
+}

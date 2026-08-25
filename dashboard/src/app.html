@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="text-scale" content="scale" />
+		<meta name="color-scheme" content="dark light" />
+		<meta name="theme-color" content="#111318" />
+		
+		<title>DeepTrack — Subterranean Mine Rescue Rover</title>
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		
+		<!-- Google Fonts & Material Symbols -->
+		<link rel="preconnect" href="https://fonts.googleapis.com">
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+		<link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400;500;600;700&family=Google+Sans+Code:wght@400;500&family=Roboto+Flex:wght@400;500;600;700&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet">
+		
+		<!-- First-paint-safe theme controller from DESIGN.md Section 22.3 -->
+		<script>
+			(() => {
+				const storageKey = "ui.theme";
+				const root = document.documentElement;
+				const validPreferences = new Set(["system", "light", "dark"]);
+				const media = window.matchMedia("(prefers-color-scheme: dark)");
+
+				function readPreference() {
+					try {
+						const saved = window.localStorage.getItem(storageKey);
+						return validPreferences.has(saved) ? saved : "dark";
+					} catch {
+						return "dark";
+					}
+				}
+
+				function apply(preference) {
+					const safePreference = validPreferences.has(preference) ? preference : "dark";
+					const resolved = safePreference === "system"
+						? (media.matches ? "dark" : "light")
+						: safePreference;
+
+					root.dataset.theme = resolved;
+					root.dataset.themePreference = safePreference;
+					root.classList.toggle("dark", resolved === "dark");
+					root.classList.toggle("light", resolved === "light");
+					root.style.colorScheme = resolved;
+
+					const themeMeta = document.querySelector('meta[name="theme-color"]');
+					if (themeMeta) {
+						themeMeta.content = resolved === "dark" ? "#111318" : "#f9f9fc";
+					}
+
+					window.dispatchEvent(
+						new CustomEvent("ui:themechange", {
+							detail: { preference: safePreference, resolved }
+						})
+					);
+				}
+
+				apply(readPreference());
+			})();
+		</script>
+
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>
