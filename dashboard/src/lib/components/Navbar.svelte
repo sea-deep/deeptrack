@@ -51,12 +51,12 @@
       {#if active !== 'dashboard'}
         <a href="/dashboard" class="ui-button ui-button--filled !h-10 !px-4 text-xs font-bold whitespace-nowrap shadow-sm hover:shadow transition-all duration-200 active:scale-98">
           <span class="material-symbols-rounded text-base">terminal</span>
-          Launch Console
+          Open dashboard
         </a>
       {:else}
         <a href="/auth" class="ui-button ui-button--outlined !h-10 !px-4 text-xs font-semibold whitespace-nowrap transition-all duration-200 active:scale-98">
           <span class="material-symbols-rounded text-base">account_circle</span>
-          Operator Portal
+          Sign in
         </a>
       {/if}
     </div>

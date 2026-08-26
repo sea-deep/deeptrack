@@ -1,14 +1,9 @@
 #include <Arduino.h>
 
-// Left TB6612: both channels share these signals.
-constexpr uint8_t LEFT_PWM = 25;  // PWMA + PWMB
-constexpr uint8_t LEFT_IN1 = 14;  // AIN1 + BIN1
-constexpr uint8_t LEFT_IN2 = 16; // AIN2 + BIN2; board label RX2
+#include "../../firmware/shared/DeeptrackHardware.h"
+#include "../../firmware/shared/DeeptrackProtocol.h"
 
-// Right TB6612: both channels share these signals.
-constexpr uint8_t RIGHT_PWM = 17;  // PWMA + PWMB; board label TX2
-constexpr uint8_t RIGHT_IN1 = 33;  // AIN1 + BIN1
-constexpr uint8_t RIGHT_IN2 = 32; // AIN2 + BIN2
+namespace Pin = DeepTrack::Hardware::Rover;
 
 constexpr unsigned long MOTOR_TEST_DURATION_MS = 7000;
 
@@ -16,14 +11,14 @@ unsigned long motorStopAt = 0;
 bool motorsRunning = false;
 
 void stopMotors() {
-  digitalWrite(LEFT_PWM, LOW);
-  digitalWrite(RIGHT_PWM, LOW);
+  digitalWrite(Pin::LEFT_PWM, LOW);
+  digitalWrite(Pin::RIGHT_PWM, LOW);
 
-  digitalWrite(LEFT_IN1, LOW);
-  digitalWrite(LEFT_IN2, LOW);
+  digitalWrite(Pin::LEFT_IN1, LOW);
+  digitalWrite(Pin::LEFT_IN2, LOW);
 
-  digitalWrite(RIGHT_IN1, LOW);
-  digitalWrite(RIGHT_IN2, LOW);
+  digitalWrite(Pin::RIGHT_IN1, LOW);
+  digitalWrite(Pin::RIGHT_IN2, LOW);
 
   motorStopAt = 0;
   motorsRunning = false;
@@ -61,34 +56,34 @@ void printPins() {
 
   Serial.printf(
     "GPIO25 / D25 / PWM:  %d\n",
-    digitalRead(LEFT_PWM)
+    digitalRead(Pin::LEFT_PWM)
   );
 
   Serial.printf(
     "GPIO14 / D14 / IN1:  %d\n",
-    digitalRead(LEFT_IN1)
+    digitalRead(Pin::LEFT_IN1)
   );
 
   Serial.printf(
     "GPIO16 / RX2 / IN2:  %d\n",
-    digitalRead(LEFT_IN2)
+    digitalRead(Pin::LEFT_IN2)
   );
 
   Serial.println("RIGHT DRIVER SIGNALS:");
 
   Serial.printf(
     "GPIO17 / TX2 / PWM:  %d\n",
-    digitalRead(RIGHT_PWM)
+    digitalRead(Pin::RIGHT_PWM)
   );
 
   Serial.printf(
     "GPIO33 / D33 / IN1:  %d\n",
-    digitalRead(RIGHT_IN1)
+    digitalRead(Pin::RIGHT_IN1)
   );
 
   Serial.printf(
     "GPIO32 / D32 / IN2:  %d\n",
-    digitalRead(RIGHT_IN2)
+    digitalRead(Pin::RIGHT_IN2)
   );
 
   Serial.println();
@@ -102,16 +97,16 @@ void runMotors(
   stopMotors();
 
   setMotorSide(
-    LEFT_PWM,
-    LEFT_IN1,
-    LEFT_IN2,
+    Pin::LEFT_PWM,
+    Pin::LEFT_IN1,
+    Pin::LEFT_IN2,
     leftDirection
   );
 
   setMotorSide(
-    RIGHT_PWM,
-    RIGHT_IN1,
-    RIGHT_IN2,
+    Pin::RIGHT_PWM,
+    Pin::RIGHT_IN1,
+    Pin::RIGHT_IN2,
     rightDirection
   );
 
@@ -148,13 +143,13 @@ void printHelp() {
 void setup() {
   Serial.begin(115200);
 
-  pinMode(LEFT_PWM, OUTPUT);
-  pinMode(LEFT_IN1, OUTPUT);
-  pinMode(LEFT_IN2, OUTPUT);
+  pinMode(Pin::LEFT_PWM, OUTPUT);
+  pinMode(Pin::LEFT_IN1, OUTPUT);
+  pinMode(Pin::LEFT_IN2, OUTPUT);
 
-  pinMode(RIGHT_PWM, OUTPUT);
-  pinMode(RIGHT_IN1, OUTPUT);
-  pinMode(RIGHT_IN2, OUTPUT);
+  pinMode(Pin::RIGHT_PWM, OUTPUT);
+  pinMode(Pin::RIGHT_IN1, OUTPUT);
+  pinMode(Pin::RIGHT_IN2, OUTPUT);
 
   stopMotors();
 

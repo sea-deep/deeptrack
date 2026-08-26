@@ -1,0 +1,21 @@
+#pragma once
+
+#include <stdint.h>
+
+// Copy this file to DeeptrackRadioConfig.local.h, enter the two measured STA
+// MAC addresses and two independently generated 16-byte keys, then keep the
+// local file out of version control.
+namespace DeepTrack {
+namespace RadioConfig {
+constexpr bool ENABLED = true;
+constexpr uint8_t CHANNEL = 1;  // Set the same tested 2.4 GHz channel on both peers.
+constexpr uint8_t ROVER_MAC[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+constexpr uint8_t GATEWAY_MAC[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+constexpr uint8_t PMK[16] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+constexpr uint8_t LMK[16] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+}  // namespace RadioConfig
+}  // namespace DeepTrack

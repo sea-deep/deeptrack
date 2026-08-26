@@ -1,42 +1,38 @@
-# sv
+# DEEPTRACK dashboard
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+SvelteKit operator interface for DEEPTRACK. Demo mode is an explicitly marked
+judge sandbox with no connection controls. Real mode uses Web Serial and accepts
+only the production gateway's protocol-1 NDJSON; it starts unknown and never
+falls back to fixtures.
 
-## Creating a project
+## Local development
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
+Install exactly the committed dependency graph and start Vite:
 
 ```sh
-# recreate this project
-npx sv@0.17.0 create --template minimal --types jsdoc --no-install .
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
+npm ci
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
-
-To create a production version of your app:
+Run the complete local verification set:
 
 ```sh
+npm run check
 npm run build
+npm run test:console
+npm run audit:ui
 ```
 
-You can preview the production build with `npm run preview`.
+## Data rules
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+- `SIMULATED` is never presented as live hardware evidence.
+- MQ-4 values remain raw or qualitative; no ppm, %LEL, or safe-air claim is allowed.
+- The water probe supplies contact evidence, not water depth.
+- Route/map views remain estimated and must not be called SLAM.
+- Battery voltage or percentage stays unknown until measurement hardware exists.
+- Cloud authentication/history must not enter the rover safety or command path.
+
+The implemented laptop contract is newline-delimited JSON from the USB gateway.
+Binary ESP-NOW structs are rover/gateway-only and live in
+`../firmware/shared/DeeptrackProtocol.h`. The removed legacy HTTP control and
+in-memory telemetry endpoints are not part of the real command path.

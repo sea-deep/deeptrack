@@ -13,7 +13,7 @@
   } = $props();
 
   const navItems = [
-    { id: 'console', icon: 'terminal', label: 'Console' },
+    { id: 'console', icon: 'terminal', label: 'Overview' },
     { id: 'maps', icon: 'map', label: 'Maps' },
     { id: 'logs', icon: 'list_alt', label: 'Logs' },
     { id: 'hardware', icon: 'memory', label: 'Hardware' }
@@ -37,7 +37,7 @@
 
 <aside
   class="w-20 shrink-0 h-full bg-[var(--md-sys-color-surface-container)] border-r border-[var(--md-sys-color-outline-variant)] flex flex-col items-center justify-between py-5 z-40 select-none transition-colors duration-200 overflow-visible"
-  aria-label="Subterranean navigation rail"
+  aria-label="Dashboard navigation"
 >
   <!-- Top Brand Mark & Destinations -->
   <div class="flex flex-col items-center w-full">
@@ -102,7 +102,7 @@
         class:bg-[var(--ui-color-success)]={isConnected && !isEstop}
         class:bg-[var(--md-sys-color-error)]={isEstop || !isConnected}
         class:animate-pulse={isConnected && !isEstop}
-        title={isEstop ? 'Emergency Brake Active' : isConnected ? 'Node Connected' : 'Disconnected'}
+        title={isEstop ? 'Remote stop requested' : isConnected ? 'Dashboard connected' : 'Disconnected'}
       ></div>
     </div>
 

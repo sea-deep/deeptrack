@@ -4,7 +4,7 @@
   import { supabase } from '$lib/supabaseClient.js';
   import { auth } from '$lib/stores/auth.svelte.js';
 
-  let statusText = $state('Confirming operator credentials...');
+  let statusText = $state('Finishing sign in...');
   let hasError = $state(false);
 
   onMount(async () => {
@@ -14,7 +14,7 @@
       const code = urlParams.get('code');
 
       if (code) {
-        statusText = 'Exchanging authorization token...';
+        statusText = 'Finishing sign in...';
         const { data, error } = await supabase.auth.exchangeCodeForSession(code);
         if (error) {
           console.error('[OAuth Callback] exchangeCodeForSession error:', error);
@@ -24,7 +24,7 @@
             auth.session = sessionData.session;
             auth.user = sessionData.session.user;
             auth.isLoading = false;
-            goto('/dashboard', { replaceState: true });
+            goto('/dashboard/real', { replaceState: true });
             return;
           }
           throw error;
@@ -34,14 +34,14 @@
           auth.session = data.session;
           auth.user = data.session.user;
           auth.isLoading = false;
-          goto('/dashboard', { replaceState: true });
+          goto('/dashboard/real', { replaceState: true });
           return;
         }
       }
 
       // 2. Check for implicit #access_token= in URL hash
       if (window.location.hash && window.location.hash.includes('access_token')) {
-        statusText = 'Verifying access token...';
+        statusText = 'Checking sign in...';
         const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
         const access_token = hashParams.get('access_token');
         const refresh_token = hashParams.get('refresh_token');
@@ -52,7 +52,7 @@
             auth.session = data.session;
             auth.user = data.session.user;
             auth.isLoading = false;
-            goto('/dashboard', { replaceState: true });
+            goto('/dashboard/real', { replaceState: true });
             return;
           }
         }
@@ -64,7 +64,7 @@
         auth.session = session;
         auth.user = session.user;
         auth.isLoading = false;
-        goto('/dashboard', { replaceState: true });
+        goto('/dashboard/real', { replaceState: true });
         return;
       }
 
@@ -75,10 +75,10 @@
           auth.session = delayedSession;
           auth.user = delayedSession.user;
           auth.isLoading = false;
-          goto('/dashboard', { replaceState: true });
+          goto('/dashboard/real', { replaceState: true });
         } else {
           hasError = true;
-          statusText = 'Authentication failed. Redirecting to operator portal...';
+          statusText = 'Sign in failed. Returning to the sign-in page...';
           setTimeout(() => {
             goto('/auth', { replaceState: true });
           }, 1500);
@@ -88,7 +88,7 @@
     } catch (err) {
       console.error('[OAuth Callback] Exception:', err);
       hasError = true;
-      statusText = 'Authentication failed. Redirecting...';
+      statusText = 'Sign in failed. Returning to the sign-in page...';
       setTimeout(() => {
         goto('/auth', { replaceState: true });
       }, 1500);

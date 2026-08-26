@@ -12,7 +12,7 @@
    * @property {string} unit
    * @property {number[]} history
    * @property {string} status
-   * @property {string} dgmsRule
+   * @property {string} safetyNote
    * @property {string} actionThreshold
    * @property {string} dangerThreshold
    */
@@ -111,6 +111,8 @@
               class:text-[var(--ui-color-on-warning-container)]={sensor.status === 'warning'}
               class:bg-[var(--ui-color-success-container)]={sensor.status === 'normal' || sensor.status === 'success'}
               class:text-[var(--ui-color-on-success-container)]={sensor.status === 'normal' || sensor.status === 'success'}
+              class:bg-[var(--md-sys-color-surface-container-highest)]={sensor.status === 'unknown'}
+              class:text-[var(--md-sys-color-on-surface-variant)]={sensor.status === 'unknown'}
             >
               {sensor.status}
             </span>
@@ -178,22 +180,22 @@
         </div>
       </div>
 
-      <!-- Real Operational Safety Rules & Limits -->
+      <!-- Prototype interpretation boundaries -->
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
         <div class="p-3.5 rounded-xl bg-[var(--md-sys-color-surface-container-high)] border border-[var(--md-sys-color-outline-variant)] flex flex-col justify-between">
           <div class="font-semibold text-[var(--md-sys-color-on-surface)] mb-1 flex items-center gap-1.5">
             <span class="material-symbols-rounded text-sm filled text-[var(--ui-brand-cyan)]">policy</span>
-            Hazard mitigation policy
+            Interpretation boundary
           </div>
           <p class="text-sm text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">
-            {sensor.dgmsRule}
+            {sensor.safetyNote}
           </p>
         </div>
 
         <div class="p-3.5 rounded-xl bg-[var(--md-sys-color-surface-container-high)] border border-[var(--md-sys-color-outline-variant)] flex flex-col justify-between">
           <div class="font-semibold text-[var(--md-sys-color-on-surface)] mb-1 flex items-center gap-1.5">
             <span class="material-symbols-rounded text-sm filled text-[var(--ui-color-warning)]">alarm</span>
-            Operational thresholds
+            Calibration status
           </div>
           <div class="text-sm space-y-1 text-[var(--md-sys-color-on-surface-variant)]">
             <div>• Advisory: <strong class="telemetry text-[var(--ui-color-warning)]">{sensor.actionThreshold}</strong></div>

@@ -1,12 +1,15 @@
 <script>
   import { m3SlideFade, sendShared, receiveShared } from '$lib/utils/motion.js';
 
+  let { isDemo = false } = $props();
   let searchQuery = $state('');
 
-  const savedMaps = [
+  // Explicit demo fixtures. Real live evidence is shown in the console; saved
+  // route persistence remains intentionally empty until a real recording exists.
+  const demoSavedMaps = [
     {
       id: 'MAP-DHN-01',
-      name: 'North Gallery Seam 4 (Jharia)',
+      name: 'Bench course A',
       date: '2026-08-24 21:40',
       areaSqM: 342,
       pointsCount: 1240,
@@ -14,7 +17,7 @@
     },
     {
       id: 'MAP-DHN-02',
-      name: 'East Incline Shaft B (Bokaro)',
+      name: 'Bench course B',
       date: '2026-08-23 18:15',
       areaSqM: 520,
       pointsCount: 2180,
@@ -22,7 +25,12 @@
     }
   ];
 
-  let selectedMap = $state(savedMaps[0]);
+  let savedMaps = $derived(isDemo ? demoSavedMaps : []);
+  let selectedMap = $state(/** @type {(typeof demoSavedMaps)[number] | null} */ (null));
+
+  $effect(() => {
+    selectedMap = isDemo ? demoSavedMaps[0] : null;
+  });
 
   let filteredMaps = $derived(
     savedMaps.filter(m => {
@@ -35,9 +43,10 @@
 <div class="h-full flex flex-col overflow-hidden bg-[var(--md-sys-color-surface)]">
   <!-- Top Toolbar -->
   <div class="flex items-center justify-between px-6 py-4 border-b border-[var(--md-sys-color-outline-variant)] shrink-0">
-    <h2 class="text-xl font-semibold text-[var(--md-sys-color-on-surface)]">
-      Saved scans
-    </h2>
+    <div class="flex items-center gap-3">
+      <h2 class="text-xl font-semibold text-[var(--md-sys-color-on-surface)]">{isDemo ? 'Demo route views' : 'Recorded route views'}</h2>
+      <span class="px-2 py-1 rounded bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)] text-xs font-bold">{isDemo ? 'SIMULATED DATA' : 'NO HARDWARE DATA'}</span>
+    </div>
 
     <div class="relative flex items-center w-64">
       <span class="material-symbols-rounded absolute left-3 text-lg text-[var(--md-sys-color-on-surface-variant)]">search</span>
@@ -56,8 +65,7 @@
       {#if filteredMaps.length === 0}
         <div class="flex-1 flex flex-col items-center justify-center text-[var(--md-sys-color-on-surface-variant)] p-8 text-center">
           <span class="material-symbols-rounded text-4xl mb-2 opacity-50">map</span>
-          <p class="text-sm font-medium">No saved scans yet</p>
-          <button type="button" class="mt-4 ui-button ui-button--tonal !h-9 text-sm" onclick={() => { /* route to console */ }}>Start a scan</button>
+          <p class="text-sm font-medium">{isDemo ? 'No demo route views match' : 'No real route data recorded'}</p>
         </div>
       {:else}
         {#each filteredMaps as map, i}
@@ -96,8 +104,8 @@
               <p class="text-sm text-[var(--md-sys-color-on-surface-variant)] mt-1 telemetry">ID: {selectedMap.id} · Recorded: {selectedMap.date}</p>
             </div>
             <div class="flex gap-2">
-              <button type="button" class="ui-button ui-button--outlined !h-9 !px-4 text-sm"><span class="material-symbols-rounded text-[18px]">open_in_new</span> Open in Console</button>
-              <button type="button" class="ui-button ui-button--outlined !h-9 w-9 p-0 flex items-center justify-center text-[var(--md-sys-color-error)] border-[var(--md-sys-color-outline-variant)] hover:bg-[var(--md-sys-color-error-container)] hover:text-[var(--md-sys-color-on-error-container)] hover:border-[var(--md-sys-color-error-container)]"><span class="material-symbols-rounded text-[18px]">delete</span></button>
+              <button type="button" class="ui-button ui-button--outlined !h-9 !px-4 text-sm"><span class="material-symbols-rounded text-[18px]">open_in_new</span> Open overview</button>
+              <button type="button" aria-label="Delete demo route view" class="ui-button ui-button--outlined !h-9 w-9 p-0 flex items-center justify-center text-[var(--md-sys-color-error)] border-[var(--md-sys-color-outline-variant)] hover:bg-[var(--md-sys-color-error-container)] hover:text-[var(--md-sys-color-on-error-container)] hover:border-[var(--md-sys-color-error-container)]"><span class="material-symbols-rounded text-[18px]">delete</span></button>
             </div>
           </div>
 

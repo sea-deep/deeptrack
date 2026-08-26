@@ -10,3 +10,10 @@
 .env
 .env.*
 !.env.example
+
+# JavaScript dependencies and generated framework output
+node_modules/
+.svelte-kit/
+
+# Per-build ESP-NOW identities and keys
+firmware/shared/DeeptrackRadioConfig.local.h

@@ -6,12 +6,11 @@
   import { getTheme } from '$lib/utils/theme.js';
   import { onMount } from 'svelte';
 
-  // Live simulation for Hero Radar ToF Laser Sweep
+  // Explicitly simulated hero preview; no values on this page are measurements.
   let servoAngle = $state(90);
   let servoDir = $state(4);
   let currentScanMm = $state(1240);
-  let liveMethane = $state(450); // ppm
-  let liveLel = $state(0.9); // % LEL
+  let liveGasRaw = $state(820); // uncalibrated demo ADC
   let liveTemp = $state(29.1); // °C
   let isDarkMode = $state(true);
 
@@ -142,8 +141,7 @@
         Math.abs(p.angle_deg - servoAngle) < 4 ? { angle_deg: servoAngle, distance_mm: currentScanMm, valid: true } : p
       );
 
-      liveMethane = +(420 + Math.sin(Date.now() / 4000) * 80).toFixed(0);
-      liveLel = +(liveMethane / 500.0).toFixed(2);
+      liveGasRaw = +(820 + Math.sin(Date.now() / 4000) * 40).toFixed(0);
       liveTemp = +(28.8 + Math.cos(Date.now() / 6000) * 1.2).toFixed(1);
 
       drawPolarRadar();
@@ -170,53 +168,53 @@
       <!-- Left 7 cols: Direct Headline & Actions -->
       <div class="lg:col-span-7 flex flex-col items-start hero-text-layer">
         <h1 id="hero-title" class="tracking-tight text-3xl sm:text-5xl lg:text-6xl font-bold leading-tight text-[var(--md-sys-color-on-surface)]">
-          Robotic Reconnaissance for Hazardous Coal Mines
+          DeepTrack Mine Rescue Rover
         </h1>
 
         <p class="text-base sm:text-lg text-[var(--md-sys-color-on-surface-variant)] leading-relaxed mt-5 max-w-2xl">
-          An expendable, rugged 4WD robotic rover engineered to enter post-explosion coal mine workings, map toxic firedamp (CH₄) gas pockets with 2D SLAM, and assess shaft stability before rescue personnel commit human lives underground.
+          A four-wheel hackathon robot with obstacle sensing, environmental readings, direct ESP-NOW communication, and a live web dashboard. This prototype is not certified for real mine or rescue use.
         </p>
 
         <div class="flex flex-wrap items-center gap-3.5 mt-8">
           <a href="/dashboard" class="ui-button ui-button--filled !h-12 !px-6 text-sm font-medium shadow-md hover:shadow-lg transition-all duration-300 active:scale-95">
             <span class="material-symbols-rounded text-xl">terminal</span>
-            Open mission console
+            Open dashboard
           </a>
           <a href="#hardware" class="ui-button ui-button--outlined !h-12 !px-6 text-sm font-medium transition-all duration-300 active:scale-95">
             <span class="material-symbols-rounded text-xl">developer_board</span>
-            Hardware architecture
+            See hardware
           </a>
         </div>
 
         <!-- 4-Column Technical Metrics Strip with Staggered Entrance -->
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-12 pt-8 border-t border-[var(--md-sys-color-outline-variant)] w-full hero-metrics-layer">
           <div class="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/50">
-            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">10 Hz</div>
-            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">LiDAR sweep</div>
+            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">4WD</div>
+            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">Four TT motors</div>
           </div>
           <div class="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/50">
-            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">1.0% LEL</div>
-            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">Safety cutoff</div>
+            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">2×</div>
+            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">TB6612 drivers</div>
           </div>
           <div class="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/50">
-            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">240 MHz</div>
-            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">ESP32 dual core</div>
+            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">2×</div>
+            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">ESP32 boards</div>
           </div>
           <div class="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/50">
-            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">25° Limit</div>
-            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">Rollover E-stop</div>
+            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">Offline</div>
+            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">Core rover link</div>
           </div>
         </div>
       </div>
 
-      <!-- Right 5 cols: Live Polar ToF Laser Radar Visualizer Card -->
+      <!-- Right 5 cols: explicit simulated single-point ToF preview -->
       <div class="lg:col-span-5 ui-card !p-5 flex flex-col justify-between shadow-xl bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] m3-card-interactive hero-radar-layer">
         <!-- Visualizer Header -->
         <div class="flex items-center justify-between border-b border-[var(--md-sys-color-outline-variant)] pb-3">
           <div class="flex items-center gap-2">
             <RoverLogo size={20} />
             <div class="section-title text-[var(--md-sys-color-on-surface)]">
-              VL53L0X LiDAR sweep (30° - 150°)
+              Simulated VL53L0X servo scan
             </div>
           </div>
           <div class="telemetry text-xs text-[var(--ui-brand-cyan)]">
@@ -232,13 +230,13 @@
         <!-- Telemetry Ticker -->
         <div class="grid grid-cols-2 gap-3 pt-2 text-xs">
           <div class="p-2.5 rounded-lg bg-[var(--md-sys-color-surface-container-highest)] border border-[var(--md-sys-color-outline-variant)]">
-            <div class="metric-label text-[10px] text-[var(--md-sys-color-on-surface-variant)]">Methane · CH₄</div>
+            <div class="metric-label text-[10px] text-[var(--md-sys-color-on-surface-variant)]">MQ-4 demo signal</div>
             <div class="font-semibold text-sm text-[var(--ui-brand-cyan)] telemetry mt-0.5">
-              {liveMethane} ppm <span class="text-xs font-normal text-[var(--md-sys-color-on-surface-variant)]">({liveLel}% LEL)</span>
+              {liveGasRaw} ADC <span class="text-xs font-normal text-[var(--md-sys-color-on-surface-variant)]">(simulated, uncalibrated)</span>
             </div>
           </div>
           <div class="p-2.5 rounded-lg bg-[var(--md-sys-color-surface-container-highest)] border border-[var(--md-sys-color-outline-variant)]">
-            <div class="metric-label text-[10px] text-[var(--md-sys-color-on-surface-variant)]">Shaft climate</div>
+            <div class="metric-label text-[10px] text-[var(--md-sys-color-on-surface-variant)]">Demo climate</div>
             <div class="font-semibold text-sm text-[var(--ui-brand-cyan)] telemetry mt-0.5">
               {liveTemp}°C <span class="text-xs font-normal text-[var(--md-sys-color-on-surface-variant)]">(RH: 68%)</span>
             </div>
@@ -252,10 +250,10 @@
     <section id="hardware" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 border-t border-[var(--md-sys-color-outline-variant)] hardware-section relative z-10">
       <div class="text-center max-w-3xl mx-auto mb-12">
         <h2 class="text-2xl sm:text-3xl font-bold text-[var(--md-sys-color-on-surface)]">
-          Subterranean Sensor & Actuator Architecture
+          Robot hardware
         </h2>
         <p class="text-[var(--md-sys-color-on-surface-variant)] text-sm sm:text-base mt-2">
-          Modular avionics and intrinsic sensor hardware designed for extreme coal mine environments.
+          Bench-tested prototype parts for the hackathon rover. This assembly is not intrinsically safe or mine approved.
         </p>
       </div>
 
@@ -267,32 +265,32 @@
               <span class="material-symbols-rounded text-xl filled text-[var(--ui-brand-cyan)]">air</span>
             </div>
             <h3 class="text-base font-semibold text-[var(--md-sys-color-on-surface)] mb-1.5">
-              MQ-4 Methane Sensor Array
+              MQ-4 Qualitative Gas Activity
             </h3>
             <p class="text-xs text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">
-              Continuous sampling of combustible hydrocarbon gases (200-10000 ppm CH₄) with voltage-divider protection on GPIO 34 for real-time explosion threshold detection.
+              Raw ADC sampling through a 10 kΩ / 15 kΩ divider on GPIO36. Warm-up, baseline, trend, persistence, and confidence are required before qualitative interpretation.
             </p>
           </div>
           <div class="mt-4 pt-3 border-t border-[var(--md-sys-color-outline-variant)] text-xs telemetry text-[var(--md-sys-color-on-surface-variant)]">
-            Explosion cutoff: 1.0% CH₄
+            No calibrated ppm, %LEL, or safe-air claim
           </div>
         </div>
 
-        <!-- Card 2: SLAM LiDAR -->
+        <!-- Card 2: software-ready approximate route map -->
         <div class="ui-card flex flex-col justify-between !p-5 m3-card-interactive">
           <div>
             <div class="w-10 h-10 rounded-xl bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] flex items-center justify-center mb-4">
               <span class="material-symbols-rounded text-xl filled text-[var(--ui-brand-cyan)]">explore</span>
             </div>
             <h3 class="text-base font-semibold text-[var(--md-sys-color-on-surface)] mb-1.5">
-              2D SLAM Occupancy Mapping
+              Approximate Route Mapping · Calibration Required
             </h3>
             <p class="text-xs text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">
-              Laser Time-of-Flight obstacle profiling combined with autonomous frontier discovery to generate topological maps of uncharted mine galleries and collapsed voids.
+              Calibrated encoder dead reckoning and sparse ToF occupancy evidence visualize an estimated route. Without measured geometry the pose stays unknown; this is not SLAM.
             </p>
           </div>
           <div class="mt-4 pt-3 border-t border-[var(--md-sys-color-outline-variant)] text-xs telemetry text-[var(--md-sys-color-on-surface-variant)]">
-            Autonomous & manual modes
+            Software implemented · physical validation pending
           </div>
         </div>
 
@@ -303,14 +301,14 @@
               <span class="material-symbols-rounded text-xl filled text-[var(--ui-brand-cyan)]">screen_rotation</span>
             </div>
             <h3 class="text-base font-semibold text-[var(--md-sys-color-on-surface)] mb-1.5">
-              6-DOF IMU Dynamic Stability
+              IMU Tilt Context
             </h3>
             <p class="text-xs text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">
-              MPU6050 accelerometer and gyroscope fusion computing real-time pitch and roll angles with hardware automatic emergency brake triggering at ±25° inclination.
+              MPU6050 acceleration and gyro readings support relative tilt context and future pose-confidence checks. It provides no absolute heading and is not a certified rollover detector.
             </p>
           </div>
           <div class="mt-4 pt-3 border-t border-[var(--md-sys-color-outline-variant)] text-xs telemetry text-[var(--md-sys-color-on-surface-variant)]">
-            Dynamic cutoff: ±25° pitch/roll
+            Bench-calibrated limits only
           </div>
         </div>
       </div>

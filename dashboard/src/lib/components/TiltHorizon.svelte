@@ -1,291 +1,209 @@
 <script>
   import { onMount } from 'svelte';
+  import * as THREE from 'three';
 
-  /**
-   * @typedef {Object} Props
-   * @property {number} pitchDeg - Vehicle pitch in degrees (-90 to +90)
-   * @property {number} rollDeg - Vehicle roll in degrees (-180 to +180)
-   * @property {boolean} isStale - Whether telemetry is disconnected/stale
-   * @property {boolean} [isCalibrating] - True if IMU is undergoing active calibration
-   * @property {number} [maxTiltThreshold] - Max safe inclination angle before critical warning
-   * @property {number} [cautionThreshold] - Warning inclination angle threshold
-   */
-
-  /** @type {Props} */
   let {
-    pitchDeg = 0,
-    rollDeg = 0,
+    pitchDeg = null,
+    rollDeg = null,
+    headingDeg = null,
     isStale = false,
     isCalibrating = false,
-    maxTiltThreshold = 25.0,
-    cautionThreshold = 12.0
+    maxTiltThreshold = 25,
+    cautionThreshold = 12
   } = $props();
 
-  let canvas = $state();
+  /** @type {HTMLDivElement} */
+  let host;
+  /** @type {HTMLCanvasElement} */
+  let canvas;
   let animationFrameId = 0;
+  let prefersReducedMotion = false;
 
-  // Render configuration
-  let currentPitch = $state(0);
-  let currentRoll = $state(0);
-  let prefersReducedMotion = $state(false);
-  let isDarkMode = $state(true);
+  // MPU +X points toward the chassis front in the supplied mounting reference.
+  // Convert the 90-degree-rotated sensor frame into chassis pitch and roll.
+  let hasOrientation = $derived(Number.isFinite(pitchDeg) && Number.isFinite(rollDeg));
+  let chassisPitch = $derived(hasOrientation ? -Number(rollDeg) : 0);
+  let chassisRoll = $derived(hasOrientation ? Number(pitchDeg) : 0);
+  let chassisHeading = $derived(Number.isFinite(headingDeg) ? Number(headingDeg) : 0);
+  let maxInclination = $derived(Math.max(Math.abs(chassisPitch), Math.abs(chassisRoll)));
+  let stabilityStatus = $derived(
+    !hasOrientation ? 'unknown'
+      : isCalibrating ? 'calibrating'
+        : isStale ? 'stale'
+          : maxInclination >= maxTiltThreshold ? 'critical'
+            : maxInclination >= cautionThreshold ? 'caution'
+              : 'level'
+  );
 
-  let stabilityStatus = $derived.by(() => {
-    if (isCalibrating) return 'calibrating';
-    if (isStale) return 'stale';
-
-    const maxInclination = Math.max(Math.abs(pitchDeg), Math.abs(rollDeg));
-    if (maxInclination >= maxTiltThreshold) return 'critical';
-    if (maxInclination >= cautionThreshold) return 'caution';
-    return 'level';
-  });
-
-  function updateThemeState() {
-    isDarkMode = document.documentElement.getAttribute('data-theme') === 'dark';
-  }
-
-  function drawHorizon() {
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const w = canvas.width;
-    const h = canvas.height;
-    const cx = w / 2;
-    const cy = h / 2;
-    const r = Math.min(w, h) / 2 - 4; // Use slightly padded radius for border
-
-    ctx.clearRect(0, 0, w, h);
-
-    ctx.save(); // Save base state
-
-    // Circular clipping mask for the instrument dial
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.clip();
-
-    // The pitch scale translates vertically.
-    // At +/- 90 degrees, it shifts +/- r.
-    // For small angles, we clamp them visually inside the visible reticle
-    const clampedPitch = Math.max(-80, Math.min(80, currentPitch));
-    const pitchOffset = cy + (clampedPitch * (r / 50));
-
-    ctx.save(); // Save clip state before transformations
-
-    // Apply vehicle Roll (rotation around center)
-    ctx.translate(cx, cy);
-    ctx.rotate((currentRoll * Math.PI) / 180);
-    ctx.translate(-cx, -cy);
-
-    // 1. Sky Region (Top)
-    const skyGrad = ctx.createLinearGradient(0, -r * 2 + pitchOffset, 0, pitchOffset);
-    if (isDarkMode) {
-      skyGrad.addColorStop(0, '#001933');
-      skyGrad.addColorStop(1, '#004c99');
-    } else {
-      skyGrad.addColorStop(0, '#bae6fd');
-      skyGrad.addColorStop(1, '#7dd3fc');
-    }
-    ctx.fillStyle = skyGrad;
-    ctx.fillRect(-w * 1.5, -h * 2 + pitchOffset, w * 3, h * 2);
-
-    // 2. Ground Region (Bottom)
-    const groundGrad = ctx.createLinearGradient(0, pitchOffset, 0, r * 2 + pitchOffset);
-    if (isDarkMode) {
-      groundGrad.addColorStop(0, '#3d1e03');
-      groundGrad.addColorStop(1, '#1f0d00');
-    } else {
-      groundGrad.addColorStop(0, '#78350f');
-      groundGrad.addColorStop(1, '#451a03');
-    }
-    ctx.fillStyle = groundGrad;
-    ctx.fillRect(-w * 1.5, pitchOffset, w * 3, h * 2);
-
-    // 3. High-Contrast Horizon Line
-    ctx.strokeStyle = isDarkMode ? '#59dbc7' : '#ffffff';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(-w * 1.5, pitchOffset);
-    ctx.lineTo(w * 1.5, pitchOffset);
-    ctx.stroke();
-
-    // 4. Pitch Ladder Ticks (+10°, +20°, -10°, -20°)
-    const pitchSteps = [20, 10, -10, -20];
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.font = '9px "Google Sans Code", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    pitchSteps.forEach(deg => {
-      const yPos = pitchOffset - deg * 2.4;
-      const lineWidth = deg % 20 === 0 ? 36 : 22;
-
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(-lineWidth, yPos);
-      ctx.lineTo(-6, yPos);
-      ctx.moveTo(6, yPos);
-      ctx.lineTo(lineWidth, yPos);
-      ctx.stroke();
-
-      ctx.fillText(`${Math.abs(deg)}°`, lineWidth + 10, yPos);
-      ctx.fillText(`${Math.abs(deg)}°`, -lineWidth - 10, yPos);
-    });
-
-    ctx.restore(); // Restore from roll/pitch transform
-
-    // 5. Roll Angle Arc & Tick Marks (Top Outer Rim)
-    const rollAngles = [-45, -30, -20, -10, 0, 10, 20, 30, 45];
-    ctx.strokeStyle = isDarkMode ? 'rgba(255, 255, 255, 0.35)' : 'rgba(0, 0, 0, 0.4)';
-    ctx.lineWidth = 1.5;
-
-    rollAngles.forEach(deg => {
-      const rad = (deg - 90) * (Math.PI / 180);
-      const isMajor = deg === 0 || Math.abs(deg) === 30 || Math.abs(deg) === 45;
-      const innerR = r - (isMajor ? 10 : 6);
-      const outerR = r - 1;
-
-      ctx.beginPath();
-      ctx.moveTo(cx + Math.cos(rad) * innerR, cy + Math.sin(rad) * innerR);
-      ctx.lineTo(cx + Math.cos(rad) * outerR, cy + Math.sin(rad) * outerR);
-      ctx.stroke();
-    });
-
-    // 6. Fixed Vehicle Reticle (Center Reference Avatar)
-    const reticleColor = isDarkMode ? '#ffd271' : '#f59e0b';
-    ctx.strokeStyle = reticleColor;
-    ctx.fillStyle = reticleColor;
-    ctx.lineWidth = 2.5;
-
-    // Left Wing
-    ctx.beginPath();
-    ctx.moveTo(cx - 38, cy);
-    ctx.lineTo(cx - 14, cy);
-    ctx.lineTo(cx - 14, cy + 6);
-    ctx.stroke();
-
-    // Right Wing
-    ctx.beginPath();
-    ctx.moveTo(cx + 38, cy);
-    ctx.lineTo(cx + 14, cy);
-    ctx.lineTo(cx + 14, cy + 6);
-    ctx.stroke();
-
-    // Center Bore Pip
-    ctx.beginPath();
-    ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.restore(); // Restore from circular mask clip
-
-    // Outer Ring Border
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.strokeStyle = isDarkMode ? 'var(--md-sys-color-outline-variant)' : '#cbd5e1';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
-
-  function animate() {
-    if (prefersReducedMotion || isStale) {
-      currentPitch = pitchDeg;
-      currentRoll = rollDeg;
-    } else {
-      // Lightly damped lerp interpolation (0.18)
-      currentPitch += (pitchDeg - currentPitch) * 0.18;
-      currentRoll += (rollDeg - currentRoll) * 0.18;
-    }
-
-    drawHorizon();
-    animationFrameId = requestAnimationFrame(animate);
-  }
+  /** @param {number} value */
+  const signed = (value) => `${value > 0 ? '+' : ''}${value.toFixed(1)}°`;
+  /** @param {string} status */
+  const statusLabel = (status) => /** @type {Record<string, string>} */ ({
+    unknown: 'Unknown', calibrating: 'Calibrating', stale: 'Frozen',
+    critical: 'Critical tilt', caution: 'Caution', level: 'Level'
+  })[status];
 
   onMount(() => {
-    updateThemeState();
     prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
+    camera.position.set(5.8, 4.4, 7.2);
+    camera.lookAt(0, 0.15, 0);
 
-    const handleThemeChange = () => {
-      updateThemeState();
-    };
-    window.addEventListener('ui:themechange', handleThemeChange);
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
 
-    if (canvas && canvas.parentElement) {
-      const size = Math.min(canvas.parentElement.clientWidth || 180, 180);
-      canvas.width = size;
-      canvas.height = size;
+    scene.add(new THREE.HemisphereLight(0xd9f7ff, 0x1b2330, 2.4));
+    const key = new THREE.DirectionalLight(0xffffff, 3.2);
+    key.position.set(4, 7, 5);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0x6fe7ff, 1.5);
+    rim.position.set(-5, 2, -4);
+    scene.add(rim);
+
+    const rover = new THREE.Group();
+    rover.rotation.order = 'YXZ';
+    scene.add(rover);
+
+    const blue = new THREE.MeshStandardMaterial({ color: 0x2479df, roughness: 0.55, metalness: 0.08 });
+    const blueTop = new THREE.MeshStandardMaterial({ color: 0x45a8ff, roughness: 0.45, metalness: 0.08 });
+    const tyre = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.82 });
+    const hub = new THREE.MeshStandardMaterial({ color: 0xf6c84c, roughness: 0.55, metalness: 0.12 });
+    const mast = new THREE.MeshStandardMaterial({ color: 0x55dfcf, roughness: 0.35, metalness: 0.15 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x122333, roughness: 0.5, metalness: 0.2 });
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.72, 3.55), blue);
+    body.position.y = 0.42;
+    rover.add(body);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(2.35, 0.18, 2.45), blueTop);
+    deck.position.set(0, 0.91, -0.25);
+    rover.add(deck);
+
+    for (const z of [-1.2, 1.2]) {
+      for (const x of [-1.62, 1.62]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.58, 0.46, 28), tyre);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(x, 0, z);
+        rover.add(wheel);
+        const wheelHub = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.48, 24), hub);
+        wheelHub.rotation.z = Math.PI / 2;
+        wheelHub.position.copy(wheel.position);
+        rover.add(wheelHub);
+      }
     }
 
-    const handleResize = () => {
-      if (canvas && canvas.parentElement) {
-        const size = Math.min(canvas.parentElement.clientWidth || 180, 180);
-        canvas.width = size;
-        canvas.height = size;
-      }
-    };
-    window.addEventListener('resize', handleResize);
+    const mastPost = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.25, 20), mast);
+    mastPost.position.set(0, 1.55, -1.16);
+    rover.add(mastPost);
+    const sensorHead = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.3, 5, 16), dark);
+    sensorHead.rotation.z = Math.PI / 2;
+    sensorHead.position.set(0, 2.16, -1.16);
+    rover.add(sensorHead);
+    const lensMaterial = new THREE.MeshStandardMaterial({ color: 0x75e8ff, emissive: 0x164e63, emissiveIntensity: 1.5 });
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.05, 18), lensMaterial);
+    lens.rotation.x = Math.PI / 2;
+    lens.position.set(0, 2.16, -1.48);
+    rover.add(lens);
 
-    currentPitch = pitchDeg;
-    currentRoll = rollDeg;
-    animationFrameId = requestAnimationFrame(animate);
+    const frontMarker = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.42, 3), mast);
+    frontMarker.rotation.x = -Math.PI / 2;
+    frontMarker.position.set(0, 0.98, -1.82);
+    rover.add(frontMarker);
+
+    const platform = new THREE.Mesh(
+      new THREE.CircleGeometry(3.9, 64),
+      new THREE.MeshStandardMaterial({ color: 0x2b3947, roughness: 0.95, transparent: true, opacity: 0.34 })
+    );
+    platform.rotation.x = -Math.PI / 2;
+    platform.position.y = -0.61;
+    scene.add(platform);
+    const grid = new THREE.GridHelper(8, 16, 0x4adcca, 0x536474);
+    grid.position.y = -0.59;
+    const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
+    gridMaterials.forEach((material) => {
+      material.transparent = true;
+      material.opacity = 0.34;
+    });
+    scene.add(grid);
+
+    let shownPitch = chassisPitch;
+    let shownRoll = chassisRoll;
+    let shownHeading = chassisHeading;
+    const resize = () => {
+      if (!host) return;
+      const width = Math.max(220, host.clientWidth);
+      const height = Math.max(190, host.clientHeight);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    };
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(host);
+    resize();
+
+    const animate = () => {
+      const damping = prefersReducedMotion || isStale ? 1 : 0.12;
+      shownPitch += (chassisPitch - shownPitch) * damping;
+      shownRoll += (chassisRoll - shownRoll) * damping;
+      const headingDelta = ((chassisHeading - shownHeading + 540) % 360) - 180;
+      shownHeading += headingDelta * damping;
+      rover.rotation.set(
+        THREE.MathUtils.degToRad(shownPitch),
+        THREE.MathUtils.degToRad(-shownHeading),
+        THREE.MathUtils.degToRad(shownRoll),
+        'YXZ'
+      );
+      renderer.render(scene, camera);
+      animationFrameId = requestAnimationFrame(animate);
+    };
+    animate();
 
     return () => {
-      window.removeEventListener('ui:themechange', handleThemeChange);
-      window.removeEventListener('resize', handleResize);
       cancelAnimationFrame(animationFrameId);
+      resizeObserver.disconnect();
+      scene.traverse((item) => {
+        if (item instanceof THREE.Mesh) {
+          item.geometry?.dispose();
+          const materials = Array.isArray(item.material) ? item.material : [item.material];
+          materials.forEach((material) => material.dispose());
+        }
+      });
+      renderer.dispose();
     };
   });
 </script>
 
-<div class="flex flex-col items-center relative select-none w-full h-full justify-center">
-  <!-- Artificial Horizon Canvas Surface -->
-  <div class="relative flex items-center justify-center shrink-0 w-full my-1">
-    <canvas
-      bind:this={canvas}
-      class="block rounded-full transition-[filter,opacity] duration-300 shadow-sm {isStale ? 'grayscale opacity-60' : ''}"
-    ></canvas>
-
-    <!-- Translucent Overlay for Stale or Calibrating States -->
-    {#if isStale || isCalibrating}
-      <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div class="px-3 py-1 rounded-lg bg-black/75 backdrop-blur-md text-white text-[11px] font-medium border border-white/20 shadow-lg">
-          {isCalibrating ? 'Calibrating...' : 'Frozen'}
-        </div>
+<div class="flex h-full min-h-[280px] w-full flex-col select-none">
+  <div bind:this={host} class="relative min-h-[190px] flex-1 overflow-hidden rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[radial-gradient(circle_at_50%_28%,rgba(77,208,225,0.14),transparent_58%)]">
+    <canvas bind:this={canvas} class:opacity-45={isStale || !hasOrientation} class="block h-full w-full"></canvas>
+    <div class="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/85 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide backdrop-blur">
+      <span class="h-2 w-2 rounded-full" class:bg-[var(--ui-color-success)]={stabilityStatus === 'level'} class:bg-[var(--ui-color-warning)]={stabilityStatus === 'caution'} class:bg-[var(--md-sys-color-error)]={stabilityStatus === 'critical'} class:bg-[var(--md-sys-color-outline)]={['unknown','stale','calibrating'].includes(stabilityStatus)}></span>
+      {statusLabel(stabilityStatus)}
+    </div>
+    <div class="pointer-events-none absolute right-3 top-3 rounded-full border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/85 px-2.5 py-1 text-[10px] font-semibold text-[var(--md-sys-color-on-surface-variant)] backdrop-blur">Front ▲</div>
+    {#if !hasOrientation || isStale || isCalibrating}
+      <div class="pointer-events-none absolute inset-0 grid place-items-center">
+        <div class="rounded-lg border border-white/15 bg-black/75 px-3 py-1.5 text-[11px] font-medium text-white shadow-lg backdrop-blur">{statusLabel(stabilityStatus)}</div>
       </div>
     {/if}
   </div>
 
-  <!-- Single Compact Row for Telemetry and Badge -->
-  <div class="w-full flex items-center justify-between mt-3 px-1">
-    <div class="flex flex-col items-start w-16">
-      <span class="text-[10px] text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider font-bold">Pitch</span>
-      <strong class="telemetry text-base font-bold leading-tight {Math.abs(pitchDeg) >= maxTiltThreshold ? 'text-[var(--md-sys-color-error)]' : Math.abs(pitchDeg) >= cautionThreshold ? 'text-[var(--ui-color-warning)]' : 'text-[var(--md-sys-color-on-surface)]'}">
-        {pitchDeg > 0 ? `+${pitchDeg.toFixed(1)}` : pitchDeg.toFixed(1)}°
-      </strong>
+  <div class="mt-3 grid grid-cols-3 gap-2">
+    <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] px-2.5 py-2">
+      <div class="text-[9px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">Pitch</div>
+      <div class="telemetry mt-0.5 text-sm font-bold">{hasOrientation ? signed(chassisPitch) : '—'}</div>
     </div>
-
-    <span class="text-[11px] font-bold px-2 py-1 rounded transition-colors duration-150 truncate max-w-[120px] text-center"
-      class:bg-[var(--ui-color-success-container)]={stabilityStatus === 'level'}
-      class:text-[var(--ui-color-on-success-container)]={stabilityStatus === 'level'}
-      class:bg-[var(--ui-color-warning-container)]={stabilityStatus === 'caution'}
-      class:text-[var(--ui-color-on-warning-container)]={stabilityStatus === 'caution'}
-      class:bg-[var(--md-sys-color-error-container)]={stabilityStatus === 'critical'}
-      class:text-[var(--md-sys-color-on-error-container)]={stabilityStatus === 'critical'}
-      class:bg-[var(--md-sys-color-surface-container-highest)]={stabilityStatus === 'stale' || stabilityStatus === 'calibrating'}
-      class:text-[var(--md-sys-color-on-surface-variant)]={stabilityStatus === 'stale' || stabilityStatus === 'calibrating'}
-    >
-      {#if stabilityStatus === 'calibrating'} Calibrating
-      {:else if stabilityStatus === 'stale'} Stale
-      {:else if stabilityStatus === 'critical'} Critical
-      {:else if stabilityStatus === 'caution'} Caution
-      {:else} Level {/if}
-    </span>
-
-    <div class="flex flex-col items-end w-16">
-      <span class="text-[10px] text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider font-bold">Roll</span>
-      <strong class="telemetry text-base font-bold leading-tight {Math.abs(rollDeg) >= maxTiltThreshold ? 'text-[var(--md-sys-color-error)]' : Math.abs(rollDeg) >= cautionThreshold ? 'text-[var(--ui-color-warning)]' : 'text-[var(--md-sys-color-on-surface)]'}">
-        {rollDeg > 0 ? `+${rollDeg.toFixed(1)}` : rollDeg.toFixed(1)}°
-      </strong>
+    <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] px-2.5 py-2 text-center">
+      <div class="text-[9px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">Relative yaw</div>
+      <div class="telemetry mt-0.5 text-sm font-bold">{Number.isFinite(headingDeg) ? `${Math.round(chassisHeading)}°` : '—'}</div>
+    </div>
+    <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] px-2.5 py-2 text-right">
+      <div class="text-[9px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">Roll</div>
+      <div class="telemetry mt-0.5 text-sm font-bold">{hasOrientation ? signed(chassisRoll) : '—'}</div>
     </div>
   </div>
+  <div class="mt-1.5 text-center text-[9px] text-[var(--md-sys-color-on-surface-variant)]">90° MPU mount correction applied · yaw is gyro-relative</div>
 </div>

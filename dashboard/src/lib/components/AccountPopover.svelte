@@ -19,7 +19,7 @@
     auth.user?.user_metadata?.full_name ||
     auth.user?.user_metadata?.name ||
     auth.user?.email?.split('@')[0] ||
-    'Operator'
+    'User'
   );
   let initials = $derived(
     displayName

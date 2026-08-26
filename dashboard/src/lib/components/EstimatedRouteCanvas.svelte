@@ -15,8 +15,11 @@
     onToggleRecord = () => {},
     scanPoints = /** @type {ScanPoint[]} */ ([]),
     roverPose = { x: 0, y: 0, headingDeg: 90 },
-    distanceMeters = 0,
     isConnected = true,
+    isDemo = false,
+    dataSource = 'UNKNOWN',
+    hasEstimatedPose = false,
+    mapEvidence = null,
     onSetWaypoint = (/** @type {{x: number, y: number}} */ _) => {}
   } = $props();
 
@@ -29,18 +32,24 @@
   let dragStart = { x: 0, y: 0 };
   let isDarkMode = $state(true);
   let followRover = $state(true);
+  let hasPoseEvidence = $derived(isDemo || hasEstimatedPose);
+  let validLocalScanCount = $derived(
+    scanPoints.filter((/** @type {ScanPoint} */ point) => point.valid === true).length
+  );
+  let hasLocalScanEvidence = $derived(validLocalScanCount > 0);
 
   // Layer Toggles (Subdued quiet states)
   let showTrajectory = $state(true);
   let showObstacles = $state(true);
-  let showLaserRays = $state(true);
+  let showTofRays = $state(true);
 
   /** @type {{x: number, y: number} | null} */
   let currentWaypoint = $state(null);
 
-  // Persistent Obstacle Point Cloud & Explored Trail
+  // Seeded demo geometry is isolated from real calibrated dead-reckoning and
+  // sparse occupancy evidence.
   /** @type {Array<{x: number, y: number, intensity: number}>} */
-  let obstaclePoints = $state([
+  const demoObstaclePoints = [
     { x: -50, y: -90, intensity: 1 }, { x: 0, y: -95, intensity: 1 }, { x: 50, y: -90, intensity: 1 },
     { x: -60, y: -45, intensity: 1 }, { x: 60, y: -45, intensity: 1 },
     { x: -65, y: 0, intensity: 1 }, { x: 65, y: 0, intensity: 1 },
@@ -48,12 +57,27 @@
     { x: -50, y: 90, intensity: 1 }, { x: 50, y: 90, intensity: 1 },
     { x: 90, y: 95, intensity: 1 }, { x: 130, y: 100, intensity: 1 }, { x: 170, y: 105, intensity: 1 },
     { x: 90, y: 135, intensity: 1 }, { x: 130, y: 140, intensity: 1 }, { x: 170, y: 145, intensity: 1 }
-  ]);
+  ];
+  let obstaclePoints = $state(/** @type {Array<{x: number, y: number, intensity: number}>} */ ([]));
 
   /** @type {Array<{x: number, y: number}>} */
-  let exploredTrail = $state([
-    { x: 0, y: 40 }, { x: 0, y: 20 }, { x: 0, y: 0 }
-  ]);
+  let exploredTrail = $state(/** @type {Array<{x: number, y: number}>} */ ([]));
+
+  $effect(() => {
+    obstaclePoints = isDemo
+      ? demoObstaclePoints.map((point) => ({ ...point }))
+      : (mapEvidence?.occupied || []).map((/** @type {any} */ cell) => ({
+          x: cell.x * mapEvidence.cellSizeM * 40,
+          y: cell.y * mapEvidence.cellSizeM * 40,
+          intensity: Math.min(1, Math.max(0, cell.log_odds / 3))
+        }));
+    exploredTrail = isDemo
+      ? [{ x: 0, y: 40 }, { x: 0, y: 20 }, { x: 0, y: 0 }]
+      : (mapEvidence?.trajectory || []).map((/** @type {any} */ point) => ({
+          x: point.x_m * 40,
+          y: point.y_m * 40
+        }));
+  });
 
   function updateThemeState() {
     isDarkMode = getTheme() === 'dark';
@@ -67,7 +91,7 @@
     const w = canvas.width;
     const h = canvas.height;
 
-    if (followRover) {
+    if (followRover && hasPoseEvidence) {
       panX = -roverPose.x * zoom;
       panY = -roverPose.y * zoom;
     }
@@ -82,8 +106,8 @@
     const trailStroke = isDarkMode ? 'rgba(89, 219, 199, 0.7)' : 'rgba(2, 132, 199, 0.8)';
     const obstacleFill = isDarkMode ? '#ffb4ab' : '#dc2626';
     const waypointColor = isDarkMode ? '#ffd271' : '#d97706';
-    const laserRayColor = isDarkMode ? 'rgba(89, 219, 199, 0.35)' : 'rgba(2, 132, 199, 0.4)';
-    const laserHitColor = isDarkMode ? '#59dbc7' : '#0284c7';
+    const tofRayColor = isDarkMode ? 'rgba(89, 219, 199, 0.35)' : 'rgba(2, 132, 199, 0.4)';
+    const tofHitColor = isDarkMode ? '#59dbc7' : '#0284c7';
     const roverBodyFill = isDarkMode ? '#9fcaff' : '#0061a4';
 
     // Clear canvas
@@ -155,7 +179,7 @@
     }
 
     // 4. Target Waypoint
-    if (currentWaypoint) {
+    if (currentWaypoint && hasPoseEvidence) {
       const wx = cx + currentWaypoint.x * zoom;
       const wy = cy + currentWaypoint.y * zoom;
       const rx = cx + roverPose.x * zoom;
@@ -177,12 +201,14 @@
       ctx.stroke();
     }
 
-    // 5. Live SG90 Servo Laser Sweep Rays (VL53L0X)
+    // 5. Single-point VL53L0X rays mounted on the SG90 servo.
     const rx = cx + roverPose.x * zoom;
     const ry = cy + roverPose.y * zoom;
     const rad = (roverPose.headingDeg - 90) * (Math.PI / 180);
 
-    if (showLaserRays) {
+    // With no calibrated pose, keep the sweep in a clearly labelled local
+    // rover frame instead of hiding real scan evidence or inventing a world pose.
+    if (showTofRays && (hasPoseEvidence || hasLocalScanEvidence)) {
       scanPoints.forEach((/** @type {ScanPoint} */ p) => {
         if (!p.valid) return;
         const rayAngle = (roverPose.headingDeg - 90 + (p.angle_deg - 90)) * (Math.PI / 180);
@@ -190,7 +216,7 @@
         const lx = rx + Math.cos(rayAngle) * distPx;
         const ly = ry + Math.sin(rayAngle) * distPx;
 
-        ctx.strokeStyle = laserRayColor;
+        ctx.strokeStyle = tofRayColor;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(rx, ry);
@@ -199,43 +225,37 @@
 
         ctx.beginPath();
         ctx.arc(lx, ly, 1.5, 0, Math.PI * 2);
-        ctx.fillStyle = laserHitColor;
+        ctx.fillStyle = tofHitColor;
         ctx.fill();
 
-        // Integrate hit points if recording
-        if (isRecording && Math.random() < 0.08) {
-          const mapX = roverPose.x + Math.cos(rayAngle) * (p.distance_mm / 20);
-          const mapY = roverPose.y + Math.sin(rayAngle) * (p.distance_mm / 20);
-          if (!obstaclePoints.some(pt => Math.hypot(pt.x - mapX, pt.y - mapY) < 6)) {
-            obstaclePoints.push({ x: mapX, y: mapY, intensity: 1 });
-          }
-        }
       });
     }
 
-    // 6. Rover Body Avatar
-    ctx.save();
-    ctx.translate(rx, ry);
-    ctx.rotate(rad + Math.PI / 2);
+    // 6. Rover Body Avatar — only when a pose is simulated or observed.
+    if (hasPoseEvidence) {
+      ctx.save();
+      ctx.translate(rx, ry);
+      ctx.rotate(rad + Math.PI / 2);
 
-    ctx.fillStyle = roverBodyFill;
-    ctx.beginPath();
-    ctx.moveTo(0, -14 * zoom);
-    ctx.lineTo(10 * zoom, 12 * zoom);
-    ctx.lineTo(0, 7 * zoom);
-    ctx.lineTo(-10 * zoom, 12 * zoom);
-    ctx.closePath();
-    ctx.fill();
+      ctx.fillStyle = roverBodyFill;
+      ctx.beginPath();
+      ctx.moveTo(0, -14 * zoom);
+      ctx.lineTo(10 * zoom, 12 * zoom);
+      ctx.lineTo(0, 7 * zoom);
+      ctx.lineTo(-10 * zoom, 12 * zoom);
+      ctx.closePath();
+      ctx.fill();
 
-    // Nose heading line
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, -5 * zoom);
-    ctx.lineTo(0, -18 * zoom);
-    ctx.stroke();
+      // Nose heading line
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -5 * zoom);
+      ctx.lineTo(0, -18 * zoom);
+      ctx.stroke();
 
-    ctx.restore();
+      ctx.restore();
+    }
   }
 
   // Pointer drag handling
@@ -269,7 +289,9 @@
 
   /** @param {MouseEvent} e */
   function handleCanvasClick(e) {
-    if (!canvas || mode !== 'AUTO_EXPLORE') return;
+    // Waypoint dispatch is demo-only until a waypoint command is added to the
+    // real rover protocol. Never draw a real target that the rover did not accept.
+    if (!canvas || !isDemo || mode !== 'AUTO_EXPLORE' || !hasPoseEvidence) return;
     const rect = canvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
@@ -297,8 +319,8 @@
   function resetView() {
     zoom = 1.0;
     followRover = true;
-    panX = -roverPose.x * zoom;
-    panY = -roverPose.y * zoom;
+    panX = hasPoseEvidence ? -roverPose.x * zoom : 0;
+    panY = hasPoseEvidence ? -roverPose.y * zoom : 0;
     drawMap();
   }
 
@@ -328,9 +350,11 @@
     }
 
     const interval = setInterval(() => {
-      const lastPt = exploredTrail[exploredTrail.length - 1];
-      if (!lastPt || Math.hypot(lastPt.x - roverPose.x, lastPt.y - roverPose.y) > 6) {
-        exploredTrail.push({ x: roverPose.x, y: roverPose.y });
+      if (isRecording && isConnected) {
+        const lastPt = exploredTrail[exploredTrail.length - 1];
+        if (!lastPt || Math.hypot(lastPt.x - roverPose.x, lastPt.y - roverPose.y) > 6) {
+          exploredTrail.push({ x: roverPose.x, y: roverPose.y });
+        }
       }
       drawMap();
     }, 100);
@@ -368,6 +392,10 @@
     onwheel={handleWheel}
   ></canvas>
 
+  <div class="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)] text-xs font-bold tracking-wide pointer-events-none">
+    {isDemo ? 'SIMULATED · ESTIMATED VIEW' : hasPoseEvidence ? `REAL · ${dataSource} · DEAD-RECKONING ESTIMATE` : hasLocalScanEvidence ? `REAL · ${dataSource} · LOCAL SCAN / POSE UNKNOWN` : `REAL · ${dataSource} · POSE UNKNOWN`}
+  </div>
+
   <!-- Top Right: Quiet Layer Toggles -->
   <div class="absolute top-3 right-3 flex items-center gap-1.5 pointer-events-auto">
     <button
@@ -388,11 +416,11 @@
     </button>
     <button
       type="button"
-      class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showLaserRays ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
-      onclick={() => { showLaserRays = !showLaserRays; drawMap(); }}
-      title="Toggle Laser Rays"
+      class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showTofRays ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
+      onclick={() => { showTofRays = !showTofRays; drawMap(); }}
+      title="Toggle ToF rays"
     >
-      Laser rays
+      ToF rays
     </button>
   </div>
 
@@ -402,9 +430,11 @@
     <div class="px-3 py-1.5 rounded-xl bg-[var(--md-sys-color-surface-container)]/95 backdrop-blur-md border border-[var(--md-sys-color-outline-variant)] text-[13px] text-[var(--md-sys-color-on-surface-variant)] shadow-sm flex items-center gap-1.5 whitespace-nowrap overflow-hidden text-ellipsis min-w-0 shrink flex-1 max-w-fit">
       <span>Pts: <strong class="telemetry text-[var(--md-sys-color-on-surface)]">{obstaclePoints.length}</strong></span>
       <span class="opacity-40">·</span>
+      <span>Scan hits: <strong class="telemetry text-[var(--md-sys-color-on-surface)]">{validLocalScanCount}</strong></span>
+      <span class="opacity-40">·</span>
       <span>Zoom: <strong class="telemetry text-[var(--ui-brand-cyan)]">{(zoom * 100).toFixed(0)}%</strong></span>
       <span class="opacity-40">·</span>
-      <span class="truncate">Pose: <strong class="telemetry text-[var(--md-sys-color-on-surface)]">x:{roverPose.x.toFixed(1)} y:{roverPose.y.toFixed(1)}</strong></span>
+      <span class="truncate">Pose: <strong class="telemetry text-[var(--md-sys-color-on-surface)]">{hasPoseEvidence ? `x:${(roverPose.x / 40).toFixed(2)}m y:${(roverPose.y / 40).toFixed(2)}m` : 'UNKNOWN'}</strong></span>
     </div>
 
     <!-- Grouped Action Buttons -->
@@ -414,7 +444,8 @@
         type="button"
         class="ui-button !h-8 !px-3 text-sm font-medium transition-all {isRecording ? 'bg-[var(--md-sys-color-error)] text-[var(--md-sys-color-on-error)] animate-pulse' : 'ui-button--tonal'}"
         onclick={() => onToggleRecord()}
-        title={isRecording ? 'Stop Recording Map' : 'Start Recording Map'}
+        disabled={!isDemo}
+        title={isRecording ? 'Stop recording estimated trail' : 'Start recording estimated trail'}
       >
         <span class="material-symbols-rounded text-sm filled">{isRecording ? 'stop_circle' : 'fiber_manual_record'}</span>
         <span>{isRecording ? 'Stop' : 'Record'}</span>
@@ -427,6 +458,7 @@
         title="Follow Rover"
         aria-label="Follow Rover"
         onclick={resetView}
+        disabled={!hasPoseEvidence}
       >
         <span class="material-symbols-rounded text-base">my_location</span>
       </button>
@@ -453,16 +485,18 @@
         <span class="material-symbols-rounded text-base">zoom_out</span>
       </button>
 
-      <!-- Clear Points -->
-      <button
-        type="button"
-        class="w-8 h-8 rounded-lg bg-[var(--md-sys-color-surface-container)] hover:bg-[var(--md-sys-color-surface-container-highest)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center text-[var(--md-sys-color-on-surface)] shadow-sm transition-transform active:scale-95"
-        title="Clear Point Cloud"
-        aria-label="Clear point cloud"
-        onclick={clearMap}
-      >
-        <span class="material-symbols-rounded text-base">delete_sweep</span>
-      </button>
+      {#if isDemo}
+        <!-- Clear simulated points -->
+        <button
+          type="button"
+          class="w-8 h-8 rounded-lg bg-[var(--md-sys-color-surface-container)] hover:bg-[var(--md-sys-color-surface-container-highest)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center text-[var(--md-sys-color-on-surface)] shadow-sm transition-transform active:scale-95"
+          title="Clear demo points"
+          aria-label="Clear demo points"
+          onclick={clearMap}
+        >
+          <span class="material-symbols-rounded text-base">delete_sweep</span>
+        </button>
+      {/if}
     </div>
   </div>
 </div>

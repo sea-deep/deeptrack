@@ -12,7 +12,7 @@
 
   $effect(() => {
     if (!auth.isLoading && auth.user) {
-      goto('/dashboard');
+      goto('/dashboard/real');
     }
   }); // 'login' or 'register'
   let email = $state('');
@@ -74,9 +74,9 @@
         if (error) {
           errorMessage = error.message;
         } else {
-          successMessage = 'Authentication confirmed. Redirecting to console...';
+          successMessage = 'Signed in. Opening the real dashboard...';
           setTimeout(() => {
-            goto('/dashboard');
+            goto('/dashboard/real');
           }, 800);
         }
       } else {
@@ -87,12 +87,12 @@
         if (error) {
           errorMessage = error.message;
         } else {
-          successMessage = 'Operator registration initiated. Check email or sign in.';
+          successMessage = 'Account created. Check your email, then sign in.';
           mode = 'login';
         }
       }
     } catch (/** @type {any} */ err) {
-      errorMessage = err?.message || 'An unexpected error occurred during authorization.';
+      errorMessage = err?.message || 'Something went wrong while signing in.';
     } finally {
       loading = false;
     }
@@ -123,10 +123,10 @@
             <RoverLogo size={52} />
           </div>
           <h1 class="text-2xl font-bold font-headline tracking-tight text-[var(--md-sys-color-on-surface)]">
-            {mode === 'login' ? 'Mission operator sign in' : 'Register operator profile'}
+            {mode === 'login' ? 'Sign in' : 'Create an account'}
           </h1>
           <p class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-1">
-            Secure access enclave · Rover fleet control
+            Sign in to connect the real gateway
           </p>
         </div>
 
@@ -181,16 +181,16 @@
 
         <!-- Interactive Form -->
         <form onsubmit={handleAuth} class="space-y-4">
-          <!-- Operator Email -->
+          <!-- Email -->
           <div class="ui-field">
-            <label for="auth-email">Operator email address</label>
+            <label for="auth-email">Email address</label>
             <div class="relative">
               <input
                 id="auth-email"
                 type="email"
                 bind:value={email}
                 required
-                placeholder="operator@deeptrack.internal"
+                placeholder="you@example.com"
                 autocomplete="email"
                 aria-invalid={errorMessage ? 'true' : undefined}
                 aria-describedby={errorMessage ? 'auth-error' : undefined}
@@ -202,7 +202,7 @@
           <!-- Password with Reveal Toggle -->
           <div class="ui-field">
             <div class="flex justify-between items-center mb-1">
-              <label for="auth-password">Operator security password</label>
+              <label for="auth-password">Password</label>
               {#if mode === 'login'}
                 <a href="#forgot" class="text-xs text-[var(--md-sys-color-primary)] hover:underline">Forgot password?</a>
               {/if}
@@ -242,13 +242,13 @@
             >
               {#if loading}
                 <span class="material-symbols-rounded text-lg animate-spin">progress_activity</span>
-                <span>Authenticating...</span>
+                <span>Signing in...</span>
               {:else if mode === 'login'}
                 <span class="material-symbols-rounded text-lg">login</span>
-                <span>Authenticate & Launch</span>
+                <span>Sign in and continue</span>
               {:else}
                 <span class="material-symbols-rounded text-lg">person_add</span>
-                <span>Provision operator profile</span>
+                <span>Create account</span>
               {/if}
             </button>
           </div>
@@ -293,13 +293,13 @@
           <span>Continue with GitHub</span>
         </button>
 
-        <!-- Quick Access Disclaimer -->
+        <!-- Current access boundary -->
         <div class="mt-6 pt-4 border-t border-[var(--md-sys-color-outline-variant)] text-center">
           <p class="text-[11px] text-[var(--md-sys-color-on-surface-variant)]">
-            Direct console telemetry is available in Demo Mode without login:
+            Sign in is only required for the real gateway. The demo stays open to everyone.
           </p>
-          <a href="/dashboard" class="text-xs font-medium text-[var(--md-sys-color-primary)] hover:underline inline-flex items-center gap-1 mt-1">
-            <span>Access open live mission console</span>
+          <a href="/" class="text-xs font-medium text-[var(--md-sys-color-primary)] hover:underline inline-flex items-center gap-1 mt-1">
+            <span>Back to home</span>
             <span class="material-symbols-rounded text-sm">arrow_forward</span>
           </a>
         </div>

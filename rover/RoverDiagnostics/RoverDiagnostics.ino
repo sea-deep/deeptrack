@@ -9,19 +9,14 @@
 #include <esp_arduino_version.h>
 #include <math.h>
 
-namespace Pin {
-constexpr uint8_t DHT_DATA = 23, GAS = 36, WATER = 39;
-constexpr uint8_t TRIG = 19, ECHO = 18;
-constexpr uint8_t SDA = 21, SCL = 22;
-constexpr uint8_t LEFT_ENCODER = 34, RIGHT_ENCODER = 35;
-constexpr uint8_t SERVO = 13, BUZZER = 4, RED = 26, GREEN = 27;
-constexpr uint8_t LEFT_PWM = 25, LEFT_IN1 = 14, LEFT_IN2 = 16;
-constexpr uint8_t RIGHT_PWM = 17, RIGHT_IN1 = 33, RIGHT_IN2 = 32;
-}
+#include "../../firmware/shared/DeeptrackHardware.h"
+#include "../../firmware/shared/DeeptrackProtocol.h"
+
+namespace Pin = DeepTrack::Hardware::Rover;
 
 constexpr uint8_t DHT_MODEL = DHT22;  // Change to DHT11 only for a DHT11.
 constexpr uint8_t LEFT_PWM_CHANNEL = 4, RIGHT_PWM_CHANNEL = 5;
-constexpr uint32_t PWM_FREQUENCY = 20000;
+constexpr uint32_t PWM_FREQUENCY = 1000; // 1 kHz for L298N motor driver efficiency
 constexpr uint8_t PWM_RESOLUTION = 8;
 constexpr int SERVO_CENTER = 90;
 constexpr int SCAN_ANGLES[] = {25, 55, 90, 125, 155};
@@ -42,13 +37,52 @@ constexpr uint32_t SEVERE_TILT_CONFIRM_MS = 180;
 constexpr uint32_t TILT_RECOVERY_COOLDOWN_MS = 2500;
 constexpr float TILT_FILTER_ALPHA = 0.16f;
 
+// ---- Encoder filtering & odometry ----------------------------------------
+// Minimum microseconds between two accepted pulses on the same encoder.
+// Rejects electrical ringing and motor-noise cross-talk. Raise if spurious
+// counts persist; lower if genuine fast pulses are being dropped.
+constexpr uint32_t ENCODER_MIN_PULSE_US = 1500;
+
+// |PWM| strictly below this is treated as "motor commanded OFF" for the
+// filtered-tick gate. Set to 20-30 so a truly stationary motor never
+// contributes to odometry even if its command drifts from zero.
+constexpr int MOTOR_ACTIVE_THRESHOLD = 25;
+
+// Straight-line balance controller — window size and PID-P gain.
+// BALANCE_WINDOW_MS: how long a rate-measurement window is (100-200 ms).
+// BALANCE_KP: proportional gain applied to normalized tick-rate error.
+// BALANCE_MAX_CORR: hard clamp on the per-side PWM correction (±value).
+constexpr uint32_t BALANCE_WINDOW_MS = 100; // 10 Hz closed-loop balance update
+constexpr float    BALANCE_KP        = 0.35f;
+constexpr int      BALANCE_MAX_CORR  = 30;  // ±30 PWM dynamic trim authority
+
+// Wheel geometry — measure once and update these two constants.
+// WHEEL_DIAMETER_CM: outer tyre diameter in centimetres.
+// LEFT/RIGHT_TICKS_PER_REV: encoder pulses per full wheel revolution.
+constexpr float WHEEL_DIAMETER_CM   = 6.5f;
+constexpr float LEFT_TICKS_PER_REV  = 20.0f;
+constexpr float RIGHT_TICKS_PER_REV = 20.0f;
+// ---------------------------------------------------------------------------
+
 DHT dht(Pin::DHT_DATA, DHT_MODEL);
 Adafruit_MPU6050 imu;
 Adafruit_VL53L0X tof;
 Servo scanner;
 Preferences preferences;
 
-volatile uint32_t leftTicks = 0, rightTicks = 0;
+// --- Raw ISR counters: always increment, never filtered (diagnostics only) --
+volatile uint32_t leftRawTicks  = 0;
+volatile uint32_t rightRawTicks = 0;
+// --- Debounce timestamps in microseconds — written only inside the ISRs ----
+volatile uint32_t lastLeftEncoderUs  = 0;
+volatile uint32_t lastRightEncoderUs = 0;
+// --- Filtered odometry counters: noise + inactive-motor pulses rejected -----
+volatile uint32_t leftFilteredTicks  = 0;
+volatile uint32_t rightFilteredTicks = 0;
+// --- Commanded PWM for each side — set by drive()/stopMotors(), read by ISR -
+// 32-bit aligned volatile int reads are atomic on Xtensa (ESP32).
+volatile int leftMotorCommand  = 0;
+volatile int rightMotorCommand = 0;
 bool hasImu = false, hasTof = false, hasServo = false;
 // The chassis is mounted with its original front facing backward.
 // Both motor banks therefore default to reversed electrical direction.
@@ -69,7 +103,10 @@ uint32_t bootMs = 0, lastFrontMs = 0, lastEnvironmentMs = 0;
 uint32_t lastImuMs = 0, lastEncoderMs = 0, lastTelemetryMs = 0;
 uint32_t stateStartMs = 0, manualUntilMs = 0, lastTurnSampleMs = 0;
 uint32_t tiltAboveSinceMs = 0, tiltRecoveryCooldownUntilMs = 0;
-uint32_t previousLeftTicks = 0, previousRightTicks = 0;
+// Balance window: shadow the filtered counters between measurement windows
+uint32_t prevBalanceLeftFiltered  = 0;
+uint32_t prevBalanceRightFiltered = 0;
+uint32_t lastBalanceWindowMs      = 0;
 uint8_t missingFrontSamples = 0, stationaryWindows = 0;
 uint8_t obstacleSamples = 0;
 uint8_t scanIndex = 0, blockedAttempts = 0;
@@ -77,13 +114,39 @@ bool tiltFilterReady = false;
 bool turnLeft = true;
 float targetTurnDegrees = 60.0f;
 int leftCorrection = 0, rightCorrection = 0;
+// Encoder calibration scale factors — set with 'encscale left/right <val>'
+// and persisted to NVS.  Default 1.0 = no scaling applied.
+float leftEncoderScale  = 1.0f;
+float rightEncoderScale = 1.0f;
+// Tick-rate cache (ticks/s) — updated each balance window for 'enc' display
+float leftTicksPerSec  = 0.0f;
+float rightTicksPerSec = 0.0f;
 String serialLine;
 
 enum class State : uint8_t { STOPPED, CRUISE, REVERSING, SCANNING, TURNING, HALTED };
 State state = State::STOPPED;
 
-void IRAM_ATTR onLeftEncoder() { leftTicks++; }
-void IRAM_ATTR onRightEncoder() { rightTicks++; }
+void IRAM_ATTR onLeftEncoder() {
+    const uint32_t now = micros();
+    // Reject pulses arriving sooner than ENCODER_MIN_PULSE_US — eliminates
+    // ringing, contact bounce, and most motor-noise cross-talk.
+    if (now - lastLeftEncoderUs < ENCODER_MIN_PULSE_US) return;
+    lastLeftEncoderUs = now;
+    ++leftRawTicks;   // always record for hardware diagnostics
+    // Only contribute to odometry while the left motor is actually commanded.
+    const int cmd = leftMotorCommand;
+    if (cmd >= MOTOR_ACTIVE_THRESHOLD || cmd <= -MOTOR_ACTIVE_THRESHOLD)
+        ++leftFilteredTicks;
+}
+void IRAM_ATTR onRightEncoder() {
+    const uint32_t now = micros();
+    if (now - lastRightEncoderUs < ENCODER_MIN_PULSE_US) return;
+    lastRightEncoderUs = now;
+    ++rightRawTicks;
+    const int cmd = rightMotorCommand;
+    if (cmd >= MOTOR_ACTIVE_THRESHOLD || cmd <= -MOTOR_ACTIVE_THRESHOLD)
+        ++rightFilteredTicks;
+}
 
 const char *stateName() {
   switch (state) {
@@ -99,6 +162,32 @@ const char *stateName() {
 
 void setBuzzer(bool enabled) {
   digitalWrite(Pin::BUZZER, enabled ^ buzzerActiveLow ? HIGH : LOW);
+}
+
+// Power bank keep-alive pulse: emits a brief 50ms chirp/load pulse every 8s
+// to draw a current spike and prevent USB power banks from entering auto-sleep.
+constexpr uint32_t KEEP_ALIVE_INTERVAL_MS = 8000;
+constexpr uint32_t KEEP_ALIVE_PULSE_MS    = 50;
+uint32_t lastKeepAliveMs = 0;
+bool keepAliveActive = false;
+bool keepAliveEnabled = true;
+
+void updatePowerBankKeepAlive(uint32_t now) {
+  if (!keepAliveEnabled) return;
+  if (!keepAliveActive) {
+    if (now - lastKeepAliveMs >= KEEP_ALIVE_INTERVAL_MS) {
+      lastKeepAliveMs = now;
+      keepAliveActive = true;
+      setBuzzer(true);
+    }
+  } else {
+    if (now - lastKeepAliveMs >= KEEP_ALIVE_PULSE_MS) {
+      keepAliveActive = false;
+      if (!gasAlarm && state != State::HALTED) {
+        setBuzzer(false);
+      }
+    }
+  }
 }
 
 void writePwm(uint8_t pin, uint8_t channel, uint8_t duty) {
@@ -137,6 +226,10 @@ void setMotor(uint8_t in1, uint8_t in2, uint8_t pwmPin, uint8_t channel,
 }
 
 void drive(int left, int right) {
+  // Update gate values before touching hardware so the ISR never sees
+  // pulses attributed to the wrong commanded state.
+  leftMotorCommand  = constrain(left,  -255, 255);
+  rightMotorCommand = constrain(right, -255, 255);
   setMotor(Pin::LEFT_IN1, Pin::LEFT_IN2, Pin::LEFT_PWM, LEFT_PWM_CHANNEL,
            left, leftInverted);
   setMotor(Pin::RIGHT_IN1, Pin::RIGHT_IN2, Pin::RIGHT_PWM, RIGHT_PWM_CHANNEL,
@@ -366,33 +459,309 @@ void selectEscapeDirection() {
   startTurn(chooseLeft, degrees);
 }
 
-void updateEncoderBalance() {
-  uint32_t left = leftTicks, right = rightTicks;
-  uint32_t deltaLeft = left - previousLeftTicks;
-  uint32_t deltaRight = right - previousRightTicks;
-  previousLeftTicks = left;
-  previousRightTicks = right;
-
-  if (deltaLeft > 0 || deltaRight > 0) encoderHasMoved = true;
-  if (!encoderHasMoved || state != State::CRUISE) return;
-
-  if (deltaLeft == 0 && deltaRight == 0) {
-    if (++stationaryWindows >= 6) {
-      stationaryWindows = 0;
-      beginAvoidance("encoder stall");
+// Returns true only when both drive sides are supposed to run at equal speed
+// in the same direction (straight forward or straight back in CRUISE state).
+// Correction is suppressed during turns, reversal, scanning, halts, and any
+// asymmetric motion so the balancer never fights intent// Dynamic piecewise scale factor lookup based on commanded PWM.
+// Dynamic piecewise scale factor lookup based on commanded PWM.
+// leftEncoderScale stored in NVS represents the high-speed cruise ratio (~0.18).
+// Low-speed regime (<185 PWM) has ~2.35x higher ratio (~0.42).
+float getEffectiveLeftScale(int pwm) {
+    const int absPwm = abs(pwm);
+    if (absPwm < 185) {
+        return leftEncoderScale * 2.35f;
     }
-    return;
-  }
-  stationaryWindows = 0;
-
-  int difference = (int)deltaLeft - (int)deltaRight;
-  if (abs(difference) >= 2) {
-    int adjustment = constrain(difference * 3, -24, 24);
-    leftCorrection = constrain(leftCorrection - adjustment, -35, 35);
-    rightCorrection = constrain(rightCorrection + adjustment, -35, 35);
-  }
+    return leftEncoderScale;
 }
 
+// Returns true when both drive sides are supposed to run at equal speed
+// in the same direction (CRUISE state or straight manual driving).
+bool isStraightDrive() {
+    const bool inStraightState = (state == State::CRUISE) || (manualUntilMs > 0);
+    if (!inStraightState) return false;
+    const int l = leftMotorCommand, r = rightMotorCommand;
+    if (l == 0 || r == 0) return false;              // one side stopped
+    if ((l > 0) != (r > 0)) return false;            // opposite signs = pivot
+    return true;
+}
+
+// Distance estimate using filtered and scaled encoder data.
+// Falls back to the single good side when one encoder is implausible.
+float odometryDistanceCm() {
+    constexpr float cmPerTickL =
+        (PI * WHEEL_DIAMETER_CM) / LEFT_TICKS_PER_REV;
+    constexpr float cmPerTickR =
+        (PI * WHEEL_DIAMETER_CM) / RIGHT_TICKS_PER_REV;
+    const float effScale = getEffectiveLeftScale(leftMotorCommand);
+    const float distL = leftFilteredTicks  * effScale          * cmPerTickL;
+    const float distR = rightFilteredTicks * rightEncoderScale * cmPerTickR;
+    const bool lActive = abs(leftMotorCommand)  >= MOTOR_ACTIVE_THRESHOLD;
+    const bool rActive = abs(rightMotorCommand) >= MOTOR_ACTIVE_THRESHOLD;
+    if (lActive && leftFilteredTicks == 0 && rightFilteredTicks > 0) return distR;
+    if (rActive && rightFilteredTicks == 0 && leftFilteredTicks > 0) return distL;
+    return (distL + distR) / 2.0f;
+}
+
+void updateEncoderBalance() {
+    const uint32_t now = millis();
+    if (now - lastBalanceWindowMs < BALANCE_WINDOW_MS) return;
+    const float windowSec = (now - lastBalanceWindowMs) / 1000.0f;
+    lastBalanceWindowMs = now;
+
+    // 1. Atomic snapshot of filtered counters
+    const uint32_t lf = leftFilteredTicks;
+    const uint32_t rf = rightFilteredTicks;
+
+    const uint32_t deltaLeft  = lf - prevBalanceLeftFiltered;
+    const uint32_t deltaRight = rf - prevBalanceRightFiltered;
+    prevBalanceLeftFiltered  = lf;
+    prevBalanceRightFiltered = rf;
+
+    // Update diagnostics tick-rate cache
+    if (windowSec > 0.0f) {
+        leftTicksPerSec  = deltaLeft  / windowSec;
+        rightTicksPerSec = deltaRight / windowSec;
+    }
+
+    if (deltaLeft > 0 || deltaRight > 0) encoderHasMoved = true;
+
+    // During turns, reversal, scanning, or stops: clear corrections and exit.
+    if (!isStraightDrive()) {
+        leftCorrection = rightCorrection = 0;
+        return;
+    }
+
+    // 2. Stall detection
+    if (deltaLeft == 0 && deltaRight == 0) {
+        if (!encoderHasMoved) return;
+        if (++stationaryWindows >= 8) { // 8 * 100ms = 800ms
+            stationaryWindows = 0;
+            beginAvoidance("encoder stall");
+        }
+        return;
+    }
+    stationaryWindows = 0;
+
+    // 3. Encoder rate error (normalized difference)
+    const float effScale = getEffectiveLeftScale(cruisePwm);
+    const float normLeft  = (float)deltaLeft  * effScale;
+    const float normRight = (float)deltaRight * rightEncoderScale;
+    const float encError  = normLeft - normRight; // positive -> left spinning faster
+
+    // 4. IMU Z-Gyro Yaw Rate Feedback (rad/s)
+    float gyroYawRateRad = 0.0f;
+    if (hasImu) {
+        sensors_event_t a, g, t;
+        imu.getEvent(&a, &g, &t);
+        gyroYawRateRad = g.gyro.z - gyroBiasZ;
+    }
+
+    // 5. Sensor-Fused Correction Calculation:
+    // - Gyro provides instant angular damping against physical yaw rotation
+    // - Encoders provide long-term odometry equalization
+    constexpr float KP_ENC  = 2.2f;   // PWM trim per normalized tick error
+    constexpr float KP_GYRO = 25.0f;  // PWM trim per rad/s yaw rate
+
+    float targetTrim = 0.0f;
+    if (hasImu && fabsf(gyroYawRateRad) > 0.015f) {
+        // Gyro detected physical rotation: positive = turning left -> boost left / cut right
+        targetTrim += (gyroYawRateRad * KP_GYRO);
+    }
+    // Blend with encoder rate error: positive = left faster -> cut left / boost right
+    targetTrim -= (encError * KP_ENC);
+
+    // Apply proportional trim directly with rounding (No integer truncation to 0!)
+    int trimPwm = (int)roundf(constrain(targetTrim, -(float)BALANCE_MAX_CORR, (float)BALANCE_MAX_CORR));
+    leftCorrection  =  trimPwm;
+    rightCorrection = -trimPwm;
+}
+
+// ---------------------------------------------------------------------------
+// Automated encoder calibration — type 'enccal' with wheels off the ground.
+//
+// Strategy: run each motor alone at several PWM levels for CAL_RUN_MS each.
+// At every level we know the commanded speed is identical for both sides, so
+// the ratio rTicks/lTicks gives the encoder sensitivity ratio that must be
+// compensated by the scale factors.  Taking the median across five levels
+// suppresses outliers from transient wheel-spin variation.
+//
+// After the routine: leftScale  = median(rTicks/lTicks), rightScale = 1.000
+// Stored in NVS keys "enc_scale_l" / "enc_scale_r" (same as 'encscale').
+// ---------------------------------------------------------------------------
+void runEncoderCalibration() {
+    // ---- Calibration parameters -------------------------------------------
+    constexpr int      CAL_PWMS[]     = {150, 165, 180, 195, 210, 220, 230, 240, 250, 255};
+    constexpr uint8_t  CAL_NUM_PWMS   = sizeof(CAL_PWMS) / sizeof(CAL_PWMS[0]);
+    constexpr uint32_t CAL_RUN_MS     = 2000;  // motor-on time per side per level
+    constexpr uint32_t CAL_COAST_MS   = 400;   // wait after stopping for coasting
+    constexpr uint32_t CAL_GAP_MS     = 250;   // gap between left and right runs
+    constexpr uint32_t CAL_MIN_TICKS  = 5;     // minimum ticks required to consider motor running
+    constexpr float    CAL_RATIO_MAX  = 100.0f;// wide acceptance range
+    constexpr float    CAL_RATIO_MIN  = 0.01f;
+    constexpr float    CAL_WARN_STDDEV_PCT = 15.0f;
+    // -----------------------------------------------------------------------
+
+    stopEverything();   // motors off, auto off, manualUntilMs cleared
+
+    const uint32_t estimatedSec =
+        (CAL_NUM_PWMS * 2u * (CAL_RUN_MS + CAL_COAST_MS + CAL_GAP_MS + 60u)) / 1000u + 6u;
+
+    Serial.println("\r\n==================================================");
+    Serial.println("  ENCAL: Automated Multi-Point Encoder Calibration");
+    Serial.printf("  Testing %u speed steps (%lu ms per side)\r\n",
+                  (unsigned)CAL_NUM_PWMS, (unsigned long)CAL_RUN_MS);
+    Serial.printf("  Estimated time: ~%lu seconds\r\n", (unsigned long)estimatedSec);
+    Serial.println("==================================================");
+    Serial.println("  >>> HOLD THE ROVER CLEAR OF THE GROUND NOW <<<");
+    for (int cd = 5; cd > 0; cd--) {
+        Serial.printf("    Starting in %d...\r\n", cd);
+        delay(1000);
+    }
+    Serial.println();
+
+    float   rawRatios[CAL_NUM_PWMS];
+    int     validPwms[CAL_NUM_PWMS];
+    uint8_t validPoints = 0;
+    float   sumRatios   = 0.0f;
+
+    for (uint8_t i = 0; i < CAL_NUM_PWMS; i++) {
+        const int pwm = CAL_PWMS[i];
+
+        // ---- Left motor run ------------------------------------------------
+        // 1. Brief kick-start to break static gearbox friction
+        drive(255, 0);
+        delay(50);
+        drive(pwm, 0);
+        delay(20);
+
+        // 2. Zero counters and measure steady state
+        noInterrupts();
+        leftRawTicks = rightRawTicks = leftFilteredTicks = rightFilteredTicks = 0;
+        lastLeftEncoderUs = lastRightEncoderUs = 0;
+        interrupts();
+
+        delay(CAL_RUN_MS);
+        drive(0, 0);
+        delay(CAL_COAST_MS);    // let wheel spin down
+
+        const uint32_t lTicks = leftFilteredTicks;
+
+        delay(CAL_GAP_MS);
+
+        // ---- Right motor run -----------------------------------------------
+        // 1. Kick-start
+        drive(0, 255);
+        delay(50);
+        drive(0, pwm);
+        delay(20);
+
+        // 2. Zero counters and measure steady state
+        noInterrupts();
+        leftRawTicks = rightRawTicks = leftFilteredTicks = rightFilteredTicks = 0;
+        lastLeftEncoderUs = lastRightEncoderUs = 0;
+        interrupts();
+
+        delay(CAL_RUN_MS);
+        drive(0, 0);
+        delay(CAL_COAST_MS);
+
+        const uint32_t rTicks = rightFilteredTicks;
+
+        delay(CAL_GAP_MS);
+
+        // ---- Validation and reporting -------------------------------------
+        Serial.printf("  [%02u/%02u] PWM=%-3d  LeftTicks=%-5lu RightTicks=%-5lu  -> ",
+                      (unsigned)(i + 1), (unsigned)CAL_NUM_PWMS, pwm,
+                      (unsigned long)lTicks, (unsigned long)rTicks);
+
+        if (lTicks < CAL_MIN_TICKS) {
+            Serial.println("SKIP (Left ticks < 5)");
+            continue;
+        }
+        if (rTicks < CAL_MIN_TICKS) {
+            Serial.println("SKIP (Right ticks < 5)");
+            continue;
+        }
+
+        const float ratio = (float)rTicks / (float)lTicks;
+
+        if (ratio > CAL_RATIO_MAX || ratio < CAL_RATIO_MIN) {
+            Serial.printf("SKIP (Ratio %.4f out of bounds)\r\n", ratio);
+            continue;
+        }
+
+        validPwms[validPoints]   = pwm;
+        rawRatios[validPoints++] = ratio;
+        sumRatios += ratio;
+        Serial.printf("Ratio = %.4f [OK]\r\n", ratio);
+    }
+
+    Serial.println();
+
+    // ---- Require minimum data points ------------------------------------
+    if (validPoints < 2) {
+        Serial.println("ENCCAL FAILED: fewer than 2 valid data points recorded.");
+        Serial.println("  Check motor wiring, battery voltage, and encoder connections.");
+        return;
+    }
+
+    // ---- Median (sort small array) ------------------------------------
+    float sorted[CAL_NUM_PWMS];
+    memcpy(sorted, rawRatios, validPoints * sizeof(float));
+    for (uint8_t i = 0; i < validPoints - 1; i++) {
+        for (uint8_t j = 0; j < validPoints - 1 - i; j++) {
+            if (sorted[j] > sorted[j + 1]) {
+                const float t = sorted[j];
+                sorted[j]     = sorted[j + 1];
+                sorted[j + 1] = t;
+            }
+        }
+    }
+    const float medianRatio = sorted[validPoints / 2];
+    const float meanRatio   = sumRatios / (float)validPoints;
+
+    // ---- Standard deviation (quality metric) -------------------------
+    float sumSq = 0.0f;
+    for (uint8_t i = 0; i < validPoints; i++) {
+        const float d = rawRatios[i] - meanRatio;
+        sumSq += d * d;
+    }
+    const float stddev     = sqrtf(sumSq / (float)validPoints);
+    const float stddevPct  = (meanRatio > 0.0f) ? (stddev / meanRatio * 100.0f) : 0.0f;
+
+    // ---- Individual point deviation report ---------------------------
+    Serial.println("  Speed Curve Summary:");
+    for (uint8_t i = 0; i < validPoints; i++) {
+        const float dev = (rawRatios[i] - meanRatio) / meanRatio * 100.0f;
+        Serial.printf("    PWM=%-3d  Ratio=%.4f  (Dev: %+.1f%%)\r\n",
+                      validPwms[i], rawRatios[i], dev);
+    }
+    Serial.println();
+
+    // ---- Summary ----------------------------------------------------------
+    Serial.printf("  Valid Points: %u/%u\r\n", (unsigned)validPoints, (unsigned)CAL_NUM_PWMS);
+    Serial.printf("  Mean Ratio:   %.4f\r\n", meanRatio);
+    Serial.printf("  Median Ratio: %.4f\r\n", medianRatio);
+    Serial.printf("  Std Deviation: %.4f (%.1f%%)\r\n", stddev, stddevPct);
+
+    const char* quality =
+        stddevPct < 5.0f  ? "EXCELLENT" :
+        stddevPct < 15.0f ? "GOOD" :
+        stddevPct < 25.0f ? "ACCEPTABLE" :
+                            "HIGH VARIANCE (Motors have strong non-linear speed curve)";
+    Serial.printf("  Calibration Quality: %s\r\n\r\n", quality);
+
+    // ---- Apply and persist -----------------------------------------------
+    // leftScale = medianRatio, rightScale = 1.000 so that LeftTicks * leftScale ≈ RightTicks * 1.0
+    leftEncoderScale  = medianRatio;
+    rightEncoderScale = 1.0f;
+    preferences.putFloat("enc_scale_l", leftEncoderScale);
+    preferences.putFloat("enc_scale_r", rightEncoderScale);
+
+    Serial.printf(">> ENCCAL SUCCESS: leftScale=%.4f  rightScale=%.4f (Saved to NVS) <<\r\n",
+                  leftEncoderScale, rightEncoderScale);
+    Serial.println(">> Ready! Type 'forward' or 'auto on' to test straight line driving. <<\r\n");
+}
 void startAutonomy() {
   stopMotors();
   if (!hasTof) {
@@ -408,6 +777,11 @@ void startAutonomy() {
   tiltAboveSinceMs = 0;
   tiltRecoveryCooldownUntilMs = 0;
   leftCorrection = rightCorrection = 0;
+  // Snapshot filtered ticks so the first balance window measures only
+  // ticks accumulated during this autonomy session, not prior ones.
+  prevBalanceLeftFiltered  = leftFilteredTicks;
+  prevBalanceRightFiltered = rightFilteredTicks;
+  lastBalanceWindowMs = 0;
   autoEnabled = true;
   pendingAutorun = false;
   setBuzzer(false);
@@ -485,7 +859,7 @@ void updateAutonomy() {
       drive(constrain(speed + leftCorrection, 175, 255),
             constrain(speed + rightCorrection, 175, 255));
     }
-    if (now - lastEncoderMs >= 400) {
+    if (now - lastEncoderMs >= 50) {
       lastEncoderMs = now;
       updateEncoderBalance();
     }
@@ -569,21 +943,24 @@ void printStatus() {
                 lastGas, gasAlarm ? "YES" : "no", gasThreshold, lastWater, waterThreshold);
   Serial.printf("temperature=%.1fC humidity=%.1f%% | tilt filtered=%.1f raw=%.1fdeg\n",
                 temperatureC, humidityPercent, currentTilt, rawTilt);
-  Serial.printf("encoders: left=%lu right=%lu | pwm=%u | imu=%s tof=%s servo=%s\n",
-                (unsigned long)leftTicks, (unsigned long)rightTicks, cruisePwm,
+  Serial.printf("encoders raw L=%lu R=%lu | filtered L=%lu R=%lu | pwm=%u | imu=%s tof=%s servo=%s\n",
+                (unsigned long)leftRawTicks,     (unsigned long)rightRawTicks,
+                (unsigned long)leftFilteredTicks, (unsigned long)rightFilteredTicks,
+                cruisePwm,
                 hasImu ? "yes" : "no", hasTof ? "yes" : "no", hasServo ? "yes" : "no");
 }
 
 void printHelp() {
   Serial.println("\nCommands:");
   Serial.println("  help | status | i2c | dht | imu | gas | water | front | tof | enc");
-  Serial.println("  scan | servo 90 | leds | buzzer on | buzzer off | buzzer invert");
+  Serial.println("  scan | servo 90 | leds | buzzer on | buzzer off | keepalive on/off");
   Serial.println("  motor left 150 | motor right 150 | drive 160 160");
   Serial.println("  forward | back | left | right | stop");
   Serial.println("  auto on | auto off | autorun on | autorun off");
   Serial.println("  speed 210 | waterthreshold 2600 | gasthreshold 3400");
   Serial.println("  invertleft | invertright | reversechassis | normalchassis");
-  Serial.println("  invertservo | calibrate | resetenc");
+  Serial.println("  invertservo | calibrate | resetenc | enctest | enccal");
+  Serial.println("  encscale left <val> | encscale right <val>  (set/persist scale factors)");
 }
 
 void runManualDrive(int left, int right) {
@@ -637,19 +1014,42 @@ void processCommand(String command) {
     Serial.printf("VL53L0X=%.1f cm\n", distance);
   }
   else if (command == "enc") {
-    Serial.printf("left=%lu right=%lu | levels: left=%d right=%d\n",
-                  (unsigned long)leftTicks, (unsigned long)rightTicks,
+    // Snapshot volatile counters once (32-bit reads atomic on ESP32)
+    const uint32_t lRaw = leftRawTicks,      rRaw = rightRawTicks;
+    const uint32_t lFil = leftFilteredTicks, rFil = rightFilteredTicks;
+    const float effScale = getEffectiveLeftScale(cruisePwm);
+    Serial.println("ENC:");
+    Serial.printf("  raw      L=%-7lu R=%lu\n",
+                  (unsigned long)lRaw, (unsigned long)rRaw);
+    Serial.printf("  filtered L=%-7lu R=%lu\n",
+                  (unsigned long)lFil, (unsigned long)rFil);
+    Serial.printf("  scale    L=%.4f (base=%.4f)  R=%.4f\n",
+                  effScale, leftEncoderScale, rightEncoderScale);
+    Serial.printf("  norm     L=%-9.1f R=%.1f\n",
+                  lFil * effScale, rFil * rightEncoderScale);
+    Serial.printf("  level    L=%d  R=%d\n",
                   digitalRead(Pin::LEFT_ENCODER), digitalRead(Pin::RIGHT_ENCODER));
+    Serial.printf("  rate     L=%.0f ticks/s  R=%.0f ticks/s\n",
+                  leftTicksPerSec, rightTicksPerSec);
+    Serial.printf("  trim     L=%+d  R=%+d (corr)\n",
+                  leftCorrection, rightCorrection);
   }
   else if (command == "resetenc") {
     detachInterrupt(digitalPinToInterrupt(Pin::LEFT_ENCODER));
     detachInterrupt(digitalPinToInterrupt(Pin::RIGHT_ENCODER));
-    leftTicks = rightTicks = 0;
-    previousLeftTicks = previousRightTicks = 0;
-    encoderHasMoved = false;
-    attachInterrupt(digitalPinToInterrupt(Pin::LEFT_ENCODER), onLeftEncoder, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(Pin::RIGHT_ENCODER), onRightEncoder, CHANGE);
-    Serial.println("Encoder counts reset.");
+    leftRawTicks          = rightRawTicks          = 0;
+    leftFilteredTicks     = rightFilteredTicks     = 0;
+    lastLeftEncoderUs     = lastRightEncoderUs     = 0;
+    prevBalanceLeftFiltered  = 0;
+    prevBalanceRightFiltered = 0;
+    lastBalanceWindowMs      = 0;
+    leftTicksPerSec       = rightTicksPerSec       = 0.0f;
+    leftCorrection        = rightCorrection        = 0;
+    stationaryWindows     = 0;
+    encoderHasMoved       = false;
+    attachInterrupt(digitalPinToInterrupt(Pin::LEFT_ENCODER),  onLeftEncoder,  FALLING);
+    attachInterrupt(digitalPinToInterrupt(Pin::RIGHT_ENCODER), onRightEncoder, FALLING);
+    Serial.println("Encoder counts reset (raw + filtered). Interrupts re-armed FALLING.");
   }
   else if (command == "scan") {
     stopEverything();
@@ -690,6 +1090,17 @@ void processCommand(String command) {
     buzzerActiveLow = !buzzerActiveLow;
     setBuzzer(false);
     Serial.printf("buzzer active-low=%s\n", buzzerActiveLow ? "yes" : "no");
+  }
+  else if (command == "keepalive on") {
+    keepAliveEnabled = true;
+    preferences.putBool("keepalive", true);
+    Serial.println("Power bank keep-alive pulse ENABLED (50ms chirp every 8s)");
+  }
+  else if (command == "keepalive off") {
+    keepAliveEnabled = false;
+    preferences.putBool("keepalive", false);
+    setBuzzer(false);
+    Serial.println("Power bank keep-alive pulse DISABLED");
   }
   else if (command == "forward") runManualDrive(cruisePwm, cruisePwm);
   else if (command == "back") runManualDrive(-cruisePwm, -cruisePwm);
@@ -775,6 +1186,58 @@ void processCommand(String command) {
     Serial.printf("IMU calibrated; pitch=%.1f roll=%.1f gyro bias=%.4f\n",
                   initialPitch, initialRoll, gyroBiasZ);
   }
+  else if (command.startsWith("encscale ")) {
+    // Usage: encscale left 0.85   OR   encscale right 1.12
+    // Applies immediately and persists across reboots via NVS.
+    char side[8]{};
+    float value = 0.0f;
+    if (sscanf(command.c_str(), "encscale %7s %f", side, &value) == 2
+        && value > 0.0f && value < 100.0f) {
+      if (strcmp(side, "left") == 0) {
+        leftEncoderScale = value;
+        preferences.putFloat("enc_scale_l", value);
+        Serial.printf("RECORDED encoder left scale=%.4f\n", value);
+      } else if (strcmp(side, "right") == 0) {
+        rightEncoderScale = value;
+        preferences.putFloat("enc_scale_r", value);
+        Serial.printf("RECORDED encoder right scale=%.4f\n", value);
+      } else {
+        Serial.println("usage: encscale left <value>  OR  encscale right <value>");
+      }
+    } else {
+      Serial.println("usage: encscale left 0.85   (positive float 0..100, persisted)");
+    }
+  }
+  else if (command == "enctest") {
+    // Passive cross-talk test: watches raw encoder ticks for 3 s while
+    // both motors are commanded off.  Reports any pulses that appear.
+    if (abs(leftMotorCommand)  >= MOTOR_ACTIVE_THRESHOLD ||
+        abs(rightMotorCommand) >= MOTOR_ACTIVE_THRESHOLD) {
+      Serial.println("ENCTEST REJECTED: stop motors first (type: stop)");
+    } else {
+      Serial.println("ENCTEST: observing 3 s — keep both motors stopped...");
+      const uint32_t lBefore = leftRawTicks;
+      const uint32_t rBefore = rightRawTicks;
+      delay(3000);
+      const uint32_t lPulses = leftRawTicks  - lBefore;
+      const uint32_t rPulses = rightRawTicks - rBefore;
+      if (lPulses > 0)
+        Serial.printf("WARNING: left encoder pulses detected while left motor commanded OFF (%lu pulses)\n",
+                      (unsigned long)lPulses);
+      else
+        Serial.println("OK: left encoder silent while motor off");
+      if (rPulses > 0)
+        Serial.printf("WARNING: right encoder pulses detected while right motor commanded OFF (%lu pulses)\n",
+                      (unsigned long)rPulses);
+      else
+        Serial.println("OK: right encoder silent while motor off");
+      Serial.printf("ENCTEST DONE: left=%lu right=%lu raw pulses during 3 s observation\n",
+                    (unsigned long)lPulses, (unsigned long)rPulses);
+    }
+  }
+  else if (command == "enccal") {
+    runEncoderCalibration();
+  }
   else Serial.println("Unknown command. Type: help");
 }
 
@@ -823,7 +1286,11 @@ void setup() {
     leftInverted = preferences.getBool("invleft", true);
     rightInverted = preferences.getBool("invright", true);
   }
-  lowAngleIsLeft = preferences.getBool("invservo", false);
+  lowAngleIsLeft  = preferences.getBool("invservo", false);
+  keepAliveEnabled = preferences.getBool("keepalive", true);
+  // Load encoder calibration scale factors (persisted by 'encscale' command)
+  leftEncoderScale  = preferences.getFloat("enc_scale_l", 1.0f);
+  rightEncoderScale = preferences.getFloat("enc_scale_r", 1.0f);
 
   scanner.setPeriodHertz(50);
   int servoChannel = scanner.attach(Pin::SERVO, 500, 2400);
@@ -834,8 +1301,8 @@ void setup() {
   bool rightPwmOk = attachMotorPwm(Pin::RIGHT_PWM, RIGHT_PWM_CHANNEL);
   stopMotors();
 
-  attachInterrupt(digitalPinToInterrupt(Pin::LEFT_ENCODER), onLeftEncoder, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(Pin::RIGHT_ENCODER), onRightEncoder, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(Pin::LEFT_ENCODER),  onLeftEncoder,  FALLING);
+  attachInterrupt(digitalPinToInterrupt(Pin::RIGHT_ENCODER), onRightEncoder, FALLING);
 
   // Read WHO_AM_I first so clone boards and MPU-6500-compatible modules are
   // easier to diagnose. 0x68 is MPU-6050; 0x70 is MPU-6500.
@@ -908,21 +1375,30 @@ void loop() {
   }
 
   uint32_t now = millis();
+  updatePowerBankKeepAlive(now);
   if (pendingAutorun && now - bootMs >= AUTORUN_DELAY_MS) startAutonomy();
 
-  if (manualUntilMs && (int32_t)(now - manualUntilMs) >= 0) {
-    stopMotors();
-    manualUntilMs = 0;
-    Serial.println("Manual motor test complete; motors stopped.");
+  if (manualUntilMs) {
+    if ((int32_t)(now - manualUntilMs) >= 0) {
+      stopMotors();
+      manualUntilMs = 0;
+      Serial.println("Manual motor test complete; motors stopped.");
+    } else if (now - lastEncoderMs >= 50) {
+      lastEncoderMs = now;
+      updateEncoderBalance();
+    }
   }
 
   updateAutonomy();
 
   if (autoEnabled && now - lastTelemetryMs >= 1200) {
     lastTelemetryMs = now;
-    Serial.printf("AUTO %s | front=%.1fcm gas=%d water=%d tilt=%.1f enc=%lu/%lu\n",
+    Serial.printf("AUTO %s | front=%.1fcm gas=%d water=%d tilt=%.1f "
+                  "raw=%lu/%lu fil=%lu/%lu corr=%d/%d\n",
                   stateName(), frontCm, lastGas, lastWater, currentTilt,
-                  (unsigned long)leftTicks, (unsigned long)rightTicks);
+                  (unsigned long)leftRawTicks,      (unsigned long)rightRawTicks,
+                  (unsigned long)leftFilteredTicks, (unsigned long)rightFilteredTicks,
+                  leftCorrection, rightCorrection);
   }
   delay(2);
 }

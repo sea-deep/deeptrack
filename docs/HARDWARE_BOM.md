@@ -1,177 +1,85 @@
-# DEEPTRACK — Complete Hardware Shopping List
+# DEEPTRACK authoritative hardware BOM
 
-Everything you need to buy for both the Rover and the Gateway.
-All audit fixes are baked in (separate 5V bus regulated by a buck converter, MQ-4 voltage divider, decoupling caps). Both ESP32 boards use **USB Type-C**, not Micro-USB.
+This list follows the 45-page implementation playbook and the locked wiring in
+`docs/WIRING_GUIDE.md`. It replaces the obsolete power-bank/5 V buck mixture.
+Record exact purchased module variants before assembly; clone board pinouts and
+electrical limits are not interchangeable.
 
-> Search on **Robu.in**, **Amazon.in**, **Quartz Components**, or your local electronics shop.
-> Prices are approximate mid-2026 INR.
+DEEPTRACK is a non-certified laboratory prototype. None of these parts makes it
+intrinsically safe or suitable for a mine, explosive atmosphere, or rescue
+deployment.
 
----
+## Rover electronics and mechanics
 
-## ROVER (Goes Inside the Mine)
+| Item | Required specification | Qty | Acceptance note |
+|---|---|---:|---|
+| ESP32 development board | ESP32-WROOM-32, 30-pin, board exposes GPIO16/17 and GPIO34/35 | 1 | Confirm exact board and STA MAC; do not substitute a PSRAM board without a pin audit |
+| Four-wheel chassis | Four TT/BO motors, four wheels, rigid two-layer frame | 1 | Mark the HC-SR04-facing end as physical front |
+| TB6612FNG breakout | Genuine dual-H-bridge breakout with VCC, VM, STBY and both channels exposed | 2 | One board per chassis side; each motor keeps its own electrical channel while each side shares commands |
+| DHT22 | Three-pin module preferred | 1 | Bare four-pin device needs an external 10 kOhm data pull-up |
+| MQ-4 module | Analog output exposed; 5 V heater supply | 1 | GPIO36 input requires the documented 10 kOhm/15 kOhm divider; qualitative trend only |
+| HC-SR04 | Standard 5 V ultrasonic module | 1 | ECHO requires the documented 10 kOhm/15 kOhm divider |
+| MPU6050/GY-521 | I2C address 0x68 | 1 | Power from the verified 3.3 V I2C domain |
+| VL53L0X breakout | I2C address 0x29, 3.3 V-compatible breakout | 1 | Mount on servo; validate `RangeStatus`, not distance alone |
+| Slotted encoder modules and discs | LM393-style, usable from 3.3 V | 2 | One per driven side; GPIO34/35 need verified external pull-ups |
+| Water-contact PCB | Analog output, operable from 3.3 V | 1 | Contact/relative wetness only, never depth |
+| SG90-class servo | 5 V supply, 3.3 V-compatible signal | 1 | Measure current and physical 35-145 degree clearance |
+| Buzzer | Three-pin active module accepting 3.3 V control, or two-pin 5 V type with transistor driver | 1 | Never drive an unverified 5 V two-pin buzzer directly from GPIO4 |
+| Red and green LEDs | Standard indicator LEDs | 2 | One dedicated 220 Ohm series resistor each |
 
-### Brain + Chassis + Power
+## Rover power - keep the positive rails separate
 
-| # | What to Search | Spec | Qty | ₹ Est. | Why |
-|---|---|---|---|---|---|
-| 1 | ESP32 DevKit V1 (30-pin) | ESP32-WROOM-32, **USB Type-C** | 1 | 350–500 | Rover MCU. 30-pin fits breadboard with 1 row free on each side |
-| 2 | 4WD Robot Car Chassis Kit | Acrylic 2-layer, includes 4× TT motors + 4× 65mm wheels + screws + standoffs | 1 kit | 400–650 | If your kit does NOT include motors/wheels, buy 4× "BO Motor 200RPM" (₹40–60 each) and 4× "65mm Robot Wheel" (₹20–30 each) separately |
-| 3 | 10000mAh Power Bank | 5V output, 2A or higher. USB-A output port | 1 | 500–900 | Must sustain 2A+ continuous draw. Avoid ultra-slim (auto-shutoff on low current). Mi/Ambrane/Syska work well |
-| 4 | USB-A to Type-C Cable (short) | 30cm data cable | 1 | 60–100 | Power bank → ESP32 (rover's ESP32 has a Type-C port, not Micro-USB). Keep it short so it doesn't snag on the chassis |
-| 5 | USB-A Breakout Board | Female USB-A socket on a small PCB with screw terminals (5V, GND) | 1 | 30–50 | Cut a spare USB cable OR use this breakout to tap 5V directly from the power bank for the separate 5V bus. Feeds into the buck converter below. See Wiring Guide for details |
-| 5a | **Buck Converter Module** (LM2596 or MP1584EN) | Adjustable DC-DC step-down, screw terminals or header pins, input up to 24–40V, output adjustable via trimpot | 1 | 60–120 | Regulates the tap from the power bank/battery down to a clean, stable **5V** for the separate 5V bus (motors, servo, MQ-4, HC-SR04). Trim the output to 5.0V with a multimeter **before** connecting any sensor. Sits between the USB-A Breakout Board and the 5V bus |
+| Item | Required specification | Qty | Acceptance note |
+|---|---|---:|---|
+| Matched 18650 cells | Same model, capacity, age and verified condition | 2 | Series logic pack only; do not improvise with unmatched cells |
+| Insulated 2-cell holder | Secure contacts and protected wiring | 1 | No loose cells on a breadboard |
+| 2S BMS | Correct 2S topology and adequate measured current rating | 1 | Verify B-, midpoint, B+, and protected P+/P- for the exact board |
+| 8.4 V CC/CV charger | Intended for a protected 2S lithium pack | 1 | A TP4056 is not a complete 2S charger |
+| 5 V step-down converter | Genuine buck, about 3 A capability | 1 | Preset to 5.0 V from the 6.4-8.4 V protected pack before connecting loads |
+| Four-cell AA holder | Secure switched holder | 1 | Supplies only both TB6612 VM inputs |
+| AA NiMH cells | Same type/state, rechargeable | 4 | About 4.8 V nominal; record loaded voltage |
+| NiMH charger | Correct for the selected cells | 1 | Do not charge cells in an improvised series circuit |
+| Motor-power switch | Rated for motor current, physically reachable | 1 | Required de-energization path because TB6612 STBY is hardwired high |
+| Fuse/protection hardware | Sized from measured load and wiring | 1 set | Place per the selected battery/BMS/switch design |
 
-### Motor Driver
+`LOGIC_5V` comes from the 2S pack through the buck. `MOTOR_POS` comes from the
+four-cell NiMH holder. Join their grounds at a deliberate low-resistance common
+reference; never join the two positive rails. A stable protected 5 V USB power
+bank may replace the entire 2S/BMS/buck logic path, but must feed the appropriate
+5 V path directly - never through a 5 V-to-5 V ordinary buck.
 
-| # | What to Search | Spec | Qty | ₹ Est. | Why |
-|---|---|---|---|---|---|
-| 6 | TB6612FNG Dual Motor Driver Module | Breakout board (NOT bare chip). Pins: VM, VCC, GND, STBY, AIN1, AIN2, PWMA, AO1, AO2, BIN1, BIN2, PWMB, BO1, BO2 | 2 | 400–700 | One H-bridge channel per motor. Two modules provide 4 independent output channels, avoiding two TT motors sharing one channel |
+## Gateway
 
-### Sensors
+| Item | Required specification | Qty | Acceptance note |
+|---|---|---:|---|
+| ESP32 development board | Same audited ESP32-WROOM-32 family | 1 | Powered and connected to the laptop through one data-capable USB cable |
+| 16x2 LCD with I2C backpack | PCF8574, measured address 0x27 or 0x3F | 1 | Try verified 3.3 V operation first; if 5 V is required, add bidirectional I2C level shifting |
+| Bidirectional I2C level shifter | 3.3 V/5 V compatible | 1 optional | Required if the LCD backpack pulls SDA/SCL to 5 V |
+| Red, yellow and green LEDs | Standard indicator LEDs | 3 | One dedicated 220 Ohm series resistor each |
+| USB cable | Data-capable, matches board and laptop connectors | 1 | USB supplies the gateway; no 5 V-to-5 V buck is needed |
 
-| # | What to Search | Spec | Qty | ₹ Est. | Why |
-|---|---|---|---|---|---|
-| 7 | DHT22 Sensor Module (3-pin) | AM2302 on a small PCB, 3 pins: VCC, DATA, GND | 1 | 180–280 | Temperature + humidity. The 3-pin module has an onboard 10kΩ pull-up. If you get the bare 4-pin sensor instead, you must add your own 10kΩ pull-up to 3V3 |
-| 8 | MQ-4 Gas Sensor Module | Blue PCB, 4 pins: VCC, GND, AO, DO | 1 | 150–220 | Methane (CH4) detection. **Must be powered from 5V** (heater coil). AO output is 0–5V, needs voltage divider to GPIO (included in resistors below) |
-| 9 | HC-SR04 Ultrasonic Sensor | 4-pin: VCC, TRIG, ECHO, GND | 1 | 50–90 | Forward obstacle distance. ECHO is 5V logic — needs voltage divider (included in resistors below) |
-| 10 | MPU6050 GY-521 Module | 6-axis accel + gyro, I2C, address 0x68 | 1 | 120–200 | Tilt / orientation sensing. Onboard 3.3V regulator + I2C pull-ups |
-| 11 | VL53L0X GY-VL53L0XV2 Module | Time-of-Flight laser distance, I2C, address 0x29 | 1 | 250–400 | Mounts on the servo for sweeping obstacle scan. Onboard regulator + pull-ups |
-| 12 | LM393 Speed Sensor Module | Slotted optical sensor + comparator PCB + encoder disc | 2 | 40–70 each | One per side. Disc attaches to motor shaft, sensor counts slots. DO = digital pulse output |
-| 13 | Water Level Sensor Module | Flat PCB with exposed traces, 3 pins: VCC, GND, SIG | 1 | 30–60 | Flood detection. Power from 3.3V so output stays within ESP32 ADC range |
+## Passives, protection and assembly
 
-### Actuators + Indicators
+| Item | Minimum qty | Assignment |
+|---|---:|---|
+| 10 kOhm, 1/4 W resistors | 4 | Two divider upper legs plus left/right encoder pull-ups; add one for a bare DHT22 |
+| 15 kOhm, 1/4 W resistors | 2 | MQ-4 and HC-SR04 divider lower legs |
+| 220 Ohm, 1/4 W resistors | 5 | Two rover LEDs and three gateway LEDs |
+| 1 kOhm resistor + NPN transistor | 1 each, conditional | Driver for a two-pin 5 V buzzer |
+| Flyback diode | 1 conditional | Use if the selected buzzer is inductive/electromagnetic |
+| 470 uF electrolytic capacitors | 2 | One near logic/servo 5 V and one near the motor VM distribution |
+| 100 nF ceramic capacitors | 3 | ESP32 3.3 V and both TB6612 VCC rails |
+| Multimeter | 1 | Mandatory for rail, divider, continuity and loaded-sag acceptance |
+| Insulated wire, terminals, headers, heat-shrink, strain relief | As measured | Do not route motor current through weak breadboard contacts |
+| Breadboards/protoboard and mounting hardware | As required | Secure modules, batteries and cables before motor tests |
 
-| # | What to Search | Spec | Qty | ₹ Est. | Why |
-|---|---|---|---|---|---|
-| 14 | SG90 Micro Servo 9g | 180° rotation, 3 wires (brown=GND, red=5V, orange=signal) | 1 | 80–130 | Mounts the VL53L0X for scanning sweep (30°–150°). Powered from 5V bus |
-| 15 | Active Piezo Buzzer | 5V, 2-pin | 1 | 15–30 | Danger alarm. Code uses `tone()` so a passive buzzer also works |
-| 16 | 5mm Red LED | Standard through-hole | 1 | 5–10 | Danger indicator |
-| 17 | 5mm Green LED | Standard through-hole | 1 | 5–10 | Normal status |
+## Procurement and assembly hold points
 
-### Resistors + Capacitors
-
-| # | What to Search | Value | Qty | ₹ Est. | Purpose |
-|---|---|---|---|---|---|
-| 18 | 10kΩ Resistor ¼W | 10kΩ | 4 | 2–5 each | 1× DHT22 pull-up (skip if 3-pin module), 1× HC-SR04 ECHO divider upper, 1× MQ-4 AO divider upper, 1× right encoder pull-up |
-| 19 | 15kΩ Resistor ¼W | 15kΩ | 2 | 2–5 each | 1× HC-SR04 ECHO divider lower, 1× MQ-4 AO divider lower |
-| 20 | 220Ω Resistor ¼W | 220Ω | 3 | 2–5 each | 1× buzzer, 1× red LED, 1× green LED |
-| 21 | 470µF Electrolytic Capacitor | 470µF 16V (or 25V) | 2 | 5–10 | One near each TB6612 VM/GND input to absorb motor startup/current spikes |
-| 22 | 100nF Ceramic Capacitor | 0.1µF (code "104") | 3 | 2–5 each | 1× across ESP32 3V3/GND, 1× across each TB6612 VCC/GND |
-
-> **Tip:** Buy a resistor assortment kit (₹80–120) and a capacitor assortment kit (₹60–100) instead of individual pieces. You'll have spares for mistakes.
-
----
-
-## GATEWAY (Sits at Base Desk, Connected to Laptop)
-
-| # | What to Search | Spec | Qty | ₹ Est. | Why |
-|---|---|---|---|---|---|
-| 23 | ESP32 DevKit V1 (30-pin) | Same as Rover — **USB Type-C** | 1 | 350–500 | Receives ESP-NOW from Rover, shows on LCD, sends to laptop via USB Serial |
-| 24 | 16×2 I2C LCD Module | LCD1602 with PCF8574 I2C backpack soldered on. 4 pins: VCC, GND, SDA, SCL. Address 0x27 | 1 | 150–220 | Displays live telemetry. Blue backlight / white text. Has a small blue contrast potentiometer on the back — adjust with screwdriver until text is visible |
-| 25 | 5mm Red LED | Standard | 1 | 5–10 | Danger |
-| 26 | 5mm Green LED | Standard | 1 | 5–10 | Normal / Link OK |
-| 27 | 5mm Yellow LED | Standard | 1 | 5–10 | Heartbeat — blinks on each received packet |
-| 28 | 220Ω Resistor ¼W | 220Ω | 3 | 2–5 each | 1 per LED |
-| 29 | **USB-C to USB-C Cable** (1–1.5m) | Data-capable cable, 1–1.5m | 1 | 100–180 | Gateway ESP32 → Laptop. **No USB-A cable is used here** — the Gateway ESP32 has a Type-C port, so this needs a laptop with a USB-C port. If your laptop only has USB-A ports, get a USB-C-to-USB-A cable instead (see note below) |
-| 29a | **Buck Converter Module** (LM2596 or MP1584EN) | Adjustable DC-DC step-down, screw terminals or header pins | 1 | 60–120 | Regulates the Gateway's 5V rail (LCD + LEDs + ESP32) to a clean, trimmed 5.0V — same role as the Rover's buck converter, just on the Gateway side. Sits between the incoming 5V source and the Gateway's 5V bus |
-
----
-
-## WIRING + ASSEMBLY SUPPLIES
-
-| # | What to Search | Qty | ₹ Est. | Why |
-|---|---|---|---|---|
-| 30 | Half-size Breadboard (400 pts) | 2 | 80–120 each | 1 for Rover (mounts on chassis), 1 for Gateway |
-| 31 | Male-to-Male Jumper Wires 20cm | 1 pack (40 wires) | 80–120 | Breadboard-to-breadboard |
-| 32 | Male-to-Female Jumper Wires 20cm | 1 pack (40 wires) | 80–120 | ESP32 headers → sensor modules |
-| 33 | Female-to-Female Jumper Wires 20cm | 1 pack (20 wires) | 60–80 | Module-to-module when both have male headers |
-| 34 | Double-sided foam tape | 1 roll | 20–30 | Mount breadboard + sensors on chassis |
-| 35 | Small zip ties | 1 pack | 20–30 | Cable management on chassis |
-| 36 | Small Phillips screwdriver | 1 | 20–40 | Chassis assembly + LCD contrast adjustment |
-
----
-
-## DASHBOARD CONNECTION (How the Cable Works)
-
-> **Cable note:** Both ESP32 boards in this list use **USB Type-C**, not Micro-USB. If your laptop has a USB-A port and no USB-A cable is on hand, buy a **USB-C to USB-A** cable instead of Type-C to Type-C for item #29 — either works as the data + power link, just match it to the port your laptop actually has.
-
-The Gateway ESP32 stays plugged into your laptop via USB cable (#29). This single cable:
-1. **Powers the Gateway** — 5V from laptop USB
-2. **Carries serial data** — Gateway prints JSON at 115200 baud
-
-On the laptop:
-1. Open `DASHBOARD/dashboard.html` in **Google Chrome** (or Edge / Chromium)
-2. Click **"Connect Serial"**
-3. Select the Gateway's port (`/dev/ttyUSB0` on Linux, `COMx` on Windows)
-4. Dashboard goes live — gauges, path trace, and event log update in real-time
-
-> **Web Serial requires Chrome/Edge/Chromium.** Firefox and Safari do NOT support it.
-
-> **Linux permission fix** if you get "Permission denied":
-> ```
-> sudo usermod -a -G dialout $USER
-> ```
-> Log out and back in.
-
----
-
-## COST SUMMARY
-
-| Section | ₹ Estimate |
-|---|---|
-| Rover (ESP32 + Chassis + Sensors + Driver + Actuators + Passives + Caps + Buck Converter) | 2,470 – 3,990 |
-| Gateway (ESP32 + LCD + LEDs + Resistors + Cable + Buck Converter) | 760–1,270 |
-| Wiring Supplies (Breadboards + Wires + Tape) | 350–550 |
-| **TOTAL** | **3,580 – 5,810** |
-
-> If you already own a 10000mAh power bank, subtract ₹500–900.
-
----
-
-## PRINTABLE CHECKLIST
-
-```text
-ROVER:
-[ ] ESP32 DevKit V1 ×1
-[ ] 4WD Chassis Kit (4× TT motors, 4× wheels, acrylic frame) ×1
-[ ] TB6612FNG Motor Driver Module ×2
-[ ] DHT22 Sensor Module (3-pin preferred) ×1
-[ ] MQ-4 Gas Sensor Module ×1
-[ ] HC-SR04 Ultrasonic Sensor ×1
-[ ] MPU6050 GY-521 Module ×1
-[ ] VL53L0X GY-VL53L0XV2 Module ×1
-[ ] LM393 Speed Sensor + Encoder Disc ×2
-[ ] Water Level Sensor Module ×1
-[ ] SG90 Micro Servo ×1
-[ ] Active Piezo Buzzer ×1
-[ ] 5mm Red LED ×1
-[ ] 5mm Green LED ×1
-[ ] 10kΩ Resistors ×4
-[ ] 15kΩ Resistors ×2
-[ ] 220Ω Resistors ×3
-[ ] 470µF Electrolytic Capacitor ×2
-[ ] 100nF Ceramic Capacitors ×3
-[ ] 10000mAh Power Bank ×1
-[ ] Short USB-A to Type-C Cable (30cm) ×1
-[ ] USB-A Breakout Board ×1
-[ ] Buck Converter Module (LM2596/MP1584EN) ×1
-
-GATEWAY:
-[ ] ESP32 DevKit V1 (USB Type-C) ×1
-[ ] 16×2 I2C LCD (PCF8574) ×1
-[ ] 5mm Red LED ×1
-[ ] 5mm Green LED ×1
-[ ] 5mm Yellow LED ×1
-[ ] 220Ω Resistors ×3
-[ ] USB-C to USB-C (or USB-C to USB-A) Cable (1–1.5m) ×1
-[ ] Buck Converter Module (LM2596/MP1584EN) ×1
-
-WIRING:
-[ ] Breadboards ×2
-[ ] M-M Jumper Wires (40pc) ×1
-[ ] M-F Jumper Wires (40pc) ×1
-[ ] F-F Jumper Wires (20pc) ×1
-[ ] Double-sided foam tape ×1
-[ ] Zip ties ×1
-[ ] Small screwdriver ×1
-```
+- Do not energize the rover until exact BMS terminals, buck polarity/output,
+  divider values, common ground, and separate positive rails are verified.
+- Do not connect external VIN while USB is attached unless the exact DevKit's
+  power-path isolation has been verified.
+- Do not connect a 5 V LCD backpack directly to ESP32 SDA/SCL if it pulls those
+  lines above 3.3 V.
+- Do not mark a substitute part accepted until its pinout, voltage domain,
+  current requirement and firmware compatibility are recorded.

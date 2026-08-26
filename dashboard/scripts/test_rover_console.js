@@ -1,42 +1,49 @@
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
+import { createUnknownTelemetry } from '../src/lib/state/telemetry.js';
 
 describe('Rover Console Operational Logic & Test Suite', () => {
 
   describe('1. Connection Button State Logic', () => {
-    function getConnectionButtonState(transportMode, isConnected, isConnecting) {
+    function getConnectionButtonState(missionMode, transportMode, isConnected, isConnecting) {
+      if (missionMode !== 'hardware') {
+        return { visible: false, label: null, disabled: true, action: 'none' };
+      }
       if (isConnecting) {
-        return { label: 'Connecting...', disabled: true, action: 'none' };
+        return { visible: true, label: 'Connecting...', disabled: true, action: 'none' };
       }
       if (transportMode === 'SERIAL' && isConnected) {
-        return { label: 'Disconnect', disabled: false, action: 'disconnect' };
+        return { visible: true, label: 'Disconnect', disabled: false, action: 'disconnect' };
       }
-      if (transportMode === 'SIMULATION' || !isConnected) {
-        return { label: 'Connect USB', disabled: false, action: 'connect' };
-      }
-      return { label: 'Connect USB', disabled: false, action: 'connect' };
+      return { visible: true, label: 'Connect USB', disabled: false, action: 'connect' };
     }
 
-    test('shows "Connecting..." and is disabled when connection is in progress', () => {
-      const state = getConnectionButtonState('SIMULATION', false, true);
+    test('does not expose a connection control in demo mode', () => {
+      const state = getConnectionButtonState('demo', 'SIMULATION', true, false);
+      assert.equal(state.visible, false);
+      assert.equal(state.label, null);
+      assert.equal(state.action, 'none');
+    });
+
+    test('shows "Connecting..." only for a real hardware connection in progress', () => {
+      const state = getConnectionButtonState('hardware', 'DISCONNECTED', false, true);
+      assert.equal(state.visible, true);
       assert.equal(state.label, 'Connecting...');
       assert.equal(state.disabled, true);
       assert.equal(state.action, 'none');
     });
 
     test('shows "Disconnect" when live Web Serial is active', () => {
-      const state = getConnectionButtonState('SERIAL', true, false);
+      const state = getConnectionButtonState('hardware', 'SERIAL', true, false);
+      assert.equal(state.visible, true);
       assert.equal(state.label, 'Disconnect');
       assert.equal(state.disabled, false);
       assert.equal(state.action, 'disconnect');
     });
 
-    test('shows "Connect USB" when in Simulation mode or disconnected', () => {
-      const stateSim = getConnectionButtonState('SIMULATION', true, false);
-      assert.equal(stateSim.label, 'Connect USB');
-      assert.equal(stateSim.action, 'connect');
-
-      const stateDisc = getConnectionButtonState('SERIAL', false, false);
+    test('shows "Connect USB" when real hardware mode is disconnected', () => {
+      const stateDisc = getConnectionButtonState('hardware', 'DISCONNECTED', false, false);
+      assert.equal(stateDisc.visible, true);
       assert.equal(stateDisc.label, 'Connect USB');
       assert.equal(stateDisc.action, 'connect');
     });
@@ -50,7 +57,7 @@ describe('Rover Console Operational Logic & Test Suite', () => {
       return { left: leftReq, right: rightReq, gated: false };
     }
 
-    test('allows movement when in Manual mode, connected, and not in E-Stop', () => {
+    test('allows movement when in Manual mode, connected, and not remotely stopped', () => {
       const out = calculateMotorOutput(200, 200, {
         isEstop: false,
         isConnected: true,
@@ -99,35 +106,35 @@ describe('Rover Console Operational Logic & Test Suite', () => {
     });
   });
 
-  describe('3. Emergency-Stop Behavior & States', () => {
+  describe('3. Remote Software Stop Behavior & States', () => {
     function getEstopState(isEstop, isEstopPending, isConnected) {
       if (!isConnected) {
-        return { label: 'E-Stop offline', disabled: true, status: 'unavailable' };
+        return { label: 'Remote stop unavailable', disabled: true, status: 'unavailable' };
       }
       if (isEstopPending) {
         return { label: 'Stopping...', disabled: false, status: 'pending' };
       }
       if (isEstop) {
-        return { label: 'Reset E-stop', disabled: false, status: 'active' };
+        return { label: 'Reset remote stop', disabled: false, status: 'active' };
       }
-      return { label: 'Emergency brake', disabled: false, status: 'nominal' };
+      return { label: 'Remote stop', disabled: false, status: 'nominal' };
     }
 
-    test('disables E-Stop when disconnected', () => {
+    test('disables the remote stop when disconnected', () => {
       const res = getEstopState(false, false, false);
-      assert.equal(res.label, 'E-Stop offline');
+      assert.equal(res.label, 'Remote stop unavailable');
       assert.equal(res.disabled, true);
     });
 
-    test('shows active "Reset E-stop" when brake is engaged', () => {
+    test('shows active reset wording when the remote stop is engaged', () => {
       const res = getEstopState(true, false, true);
-      assert.equal(res.label, 'Reset E-stop');
+      assert.equal(res.label, 'Reset remote stop');
       assert.equal(res.status, 'active');
     });
 
-    test('shows "Emergency brake" when nominal', () => {
+    test('does not represent the remote command as a physical emergency brake', () => {
       const res = getEstopState(false, false, true);
-      assert.equal(res.label, 'Emergency brake');
+      assert.equal(res.label, 'Remote stop');
       assert.equal(res.status, 'nominal');
     });
   });
@@ -175,7 +182,7 @@ describe('Rover Console Operational Logic & Test Suite', () => {
     });
   });
 
-  describe('6. Threshold State Changes', () => {
+  describe('6. Evidence-Bounded State Changes', () => {
     function evaluateStability(maxAbsAngle, cautionThreshold = 12.0, maxTiltThreshold = 25.0) {
       if (maxAbsAngle >= maxTiltThreshold) return 'critical';
       if (maxAbsAngle >= cautionThreshold) return 'caution';
@@ -188,16 +195,18 @@ describe('Rover Console Operational Logic & Test Suite', () => {
       assert.equal(evaluateStability(25.5), 'critical');
     });
 
-    function evaluateGasSafety(rawAdc) {
-      if (rawAdc >= 1500) return 'critical';
-      if (rawAdc >= 1000) return 'warning';
-      return 'normal';
+    function evaluateGasState(gasState) {
+      if (gasState === 'SENSOR_FAULT') return 'fault';
+      if (gasState === 'QUALITATIVE_ADVISORY') return 'advisory';
+      if (gasState === 'RAW_ONLY' || gasState === 'WARMING') return 'uninterpreted';
+      return 'unknown';
     }
 
-    test('evaluates MQ-4 gas thresholds correctly', () => {
-      assert.equal(evaluateGasSafety(820), 'normal');
-      assert.equal(evaluateGasSafety(1150), 'warning');
-      assert.equal(evaluateGasSafety(1600), 'critical');
+    test('does not infer gas safety from an uncalibrated raw ADC value', () => {
+      assert.equal(evaluateGasState('RAW_ONLY'), 'uninterpreted');
+      assert.equal(evaluateGasState('WARMING'), 'uninterpreted');
+      assert.equal(evaluateGasState('QUALITATIVE_ADVISORY'), 'advisory');
+      assert.equal(evaluateGasState('UNKNOWN'), 'unknown');
     });
   });
 
@@ -234,6 +243,33 @@ describe('Rover Console Operational Logic & Test Suite', () => {
 
       const lerped = updateDampedValue(target, current, false);
       assert.ok(lerped > 0 && lerped < 15.0);
+    });
+  });
+
+  describe('9. Real-Mode Unknown-State Boundary', () => {
+    test('starts every observation as unknown and contains no fabricated engineering units', () => {
+      const telemetry = createUnknownTelemetry();
+      const observationKeys = [
+        'temperature',
+        'humidity',
+        'gasRaw',
+        'waterRaw',
+        'pitchDeg',
+        'rollDeg',
+        'estimatedDistanceMeters',
+        'frontDistanceCm',
+        'rssi'
+      ];
+
+      assert.equal(telemetry.source, 'UNKNOWN');
+      for (const key of observationKeys) assert.equal(telemetry[key], null);
+      assert.equal(telemetry.gasState, 'UNKNOWN');
+      assert.equal(telemetry.waterState, 'UNKNOWN');
+      assert.equal(telemetry.alertState, 'UNKNOWN');
+      assert.equal('gasPpm' in telemetry, false);
+      assert.equal('lelPercent' in telemetry, false);
+      assert.equal('waterDepth' in telemetry, false);
+      assert.equal('batteryPercent' in telemetry, false);
     });
   });
 });
