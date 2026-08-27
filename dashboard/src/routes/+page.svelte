@@ -5,10 +5,10 @@
   import { fade } from 'svelte/transition';
 
   const roverViews = [
-    { src: '/images/rover/rover-front-left.webp', angle: 'Front left', note: 'Sensor mast and front obstacle sensors' },
-    { src: '/images/rover/rover-front-right.webp', angle: 'Front right', note: 'Drive electronics and four-wheel chassis' },
-    { src: '/images/rover/rover-rear.webp', angle: 'Rear view', note: 'Power, motor drivers and protected wiring' },
-    { src: '/images/rover/rover-top.webp', angle: 'Top view', note: 'Controller and environmental sensors' }
+    { src: '/images/rover/front.jpg', angle: 'Front view' },
+    { src: '/images/rover/right.png', angle: 'Right view' },
+    { src: '/images/rover/rear.png', angle: 'Rear view' },
+    { src: '/images/rover/left.png', angle: 'Left view' }
   ];
 
   const features = [
@@ -114,14 +114,6 @@
               out:fade={{ duration: 220 }}
             />
           {/key}
-
-          <div class="view-caption">
-            <span>{String(activeView + 1).padStart(2, '0')} / 04</span>
-            <div>
-              <strong>{roverViews[activeView].angle}</strong>
-              <small>{roverViews[activeView].note}</small>
-            </div>
-          </div>
 
           <span class="next-view">
             Next view
@@ -319,36 +311,6 @@
 
   .rover-stage:hover img { transform: scale(1.025) translateY(-0.2rem); }
 
-  .view-caption {
-    position: absolute;
-    right: 1.5rem;
-    bottom: 1.35rem;
-    left: 1.5rem;
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-    padding-top: 1.1rem;
-    border-top: 1px solid var(--md-sys-color-outline-variant);
-    text-align: left;
-  }
-
-  .view-caption > span {
-    color: var(--md-sys-color-primary);
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    font-weight: 700;
-  }
-
-  .view-caption strong,
-  .view-caption small { display: block; }
-
-  .view-caption strong { font-size: 0.9rem; }
-
-  .view-caption small {
-    margin-top: 0.15rem;
-    color: var(--md-sys-color-on-surface-variant);
-    font-size: 0.72rem;
-  }
 
   .next-view {
     position: absolute;
@@ -580,11 +542,7 @@
       right: 0.8rem;
     }
 
-    .view-caption {
-      right: 1rem;
-      bottom: 1rem;
-      left: 1rem;
-    }
+
 
     .feature-grid,
     .hardware-grid { grid-template-columns: 1fr; }
