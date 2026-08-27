@@ -5,7 +5,7 @@
   import { fade } from 'svelte/transition';
 
   const roverViews = [
-    { src: '/images/rover/front.jpg', angle: 'Front view' },
+    { src: '/images/rover/front.png', angle: 'Front view' },
     { src: '/images/rover/right.png', angle: 'Right view' },
     { src: '/images/rover/rear.png', angle: 'Rear view' },
     { src: '/images/rover/left.png', angle: 'Left view' }
