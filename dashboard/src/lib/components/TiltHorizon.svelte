@@ -35,9 +35,13 @@
             : maxInclination >= cautionThreshold ? 'caution'
               : 'level'
   );
+  // Keep the isometric rover in a stable camera projection. Rotating that
+  // already-projected drawing made quarter turns look as if the rover had
+  // stood on its nose. Relative yaw belongs to the ground-plane compass.
   let modelTransform = $derived(
-    `translate(160 112) rotate(${-chassisHeading}) skewX(${Math.max(-7, Math.min(7, chassisRoll * 0.22))}) translate(0 ${Math.max(-5, Math.min(5, chassisPitch * 0.18))})`
+    `translate(160 ${116 + Math.max(-3, Math.min(3, chassisPitch * 0.1))}) skewX(${Math.max(-3, Math.min(3, chassisRoll * 0.08))})`
   );
+  let headingTransform = $derived(`translate(160 125) rotate(${-chassisHeading})`);
 
   /** @param {number} value */
   const signed = (value) => `${value > 0 ? '+' : ''}${value.toFixed(1)}°`;
@@ -77,8 +81,12 @@
       <rect width="320" height="220" fill="url(#orientation-grid)" />
       <ellipse cx="160" cy="125" rx="112" ry="67" fill="var(--md-sys-color-surface-container-high)" opacity="0.72" />
       <ellipse cx="160" cy="125" rx="112" ry="67" fill="none" stroke="var(--md-sys-color-outline-variant)" />
-      <path d="M160 21 l-7 15 h14 z" fill="var(--ui-brand-cyan)" />
-      <text x="160" y="17" text-anchor="middle" fill="var(--md-sys-color-on-surface-variant)" font-size="10" font-weight="700">FRONT</text>
+
+      <g transform={headingTransform} class="heading-vector" aria-hidden="true">
+        <path d="M0 -82 L0 -58" stroke="var(--ui-brand-cyan)" stroke-width="3" stroke-linecap="round" />
+        <path d="M0 -91 l-7 13 h14 z" fill="var(--ui-brand-cyan)" />
+        <circle cx="0" cy="0" r="3" fill="var(--ui-brand-cyan)" />
+      </g>
 
       <g transform={modelTransform} class="orientation-rover" filter="url(#orientation-shadow)">
         <g fill="#172235" stroke="#07111f" stroke-width="2">
@@ -110,7 +118,7 @@
       <span class="h-2 w-2 rounded-full" class:bg-[var(--ui-color-success)]={stabilityStatus === 'level'} class:bg-[var(--ui-color-warning)]={stabilityStatus === 'caution'} class:bg-[var(--md-sys-color-error)]={stabilityStatus === 'critical'} class:bg-[var(--md-sys-color-outline)]={['unknown','stale','calibrating'].includes(stabilityStatus)}></span>
       {statusLabel(stabilityStatus)}
     </div>
-    <div class="pointer-events-none absolute right-3 top-3 rounded-full border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/90 px-2.5 py-1 text-xs font-semibold text-[var(--md-sys-color-on-surface-variant)] backdrop-blur">Front ▲</div>
+    <div class="pointer-events-none absolute right-3 top-3 rounded-full border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/90 px-2.5 py-1 text-xs font-semibold text-[var(--md-sys-color-on-surface-variant)] backdrop-blur">Heading <span class="text-[var(--ui-brand-cyan)]">▲</span></div>
     {#if !hasOrientation || isStale || isCalibrating}
       <div class="pointer-events-none absolute inset-0 grid place-items-center">
         <div class="rounded-lg border border-white/15 bg-black/75 px-3 py-1.5 text-sm font-medium text-white shadow-lg backdrop-blur">{statusLabel(stabilityStatus)}</div>
@@ -142,7 +150,14 @@
     transition: transform 140ms ease-out;
   }
 
+  .heading-vector {
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: transform 140ms ease-out;
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .orientation-rover { transition: none; }
+    .orientation-rover,
+    .heading-vector { transition: none; }
   }
 </style>

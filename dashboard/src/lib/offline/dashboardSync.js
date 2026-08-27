@@ -5,6 +5,21 @@ const RECORD_TYPES = new Set([
   'telemetry', 'event', 'scan', 'map_snapshot', 'sentinel'
 ]);
 
+/**
+ * @typedef {Object} CloudSession
+ * @property {string} user_id
+ * @property {string} id
+ * @property {string} rover_id
+ * @property {'hardware'} mode
+ * @property {'active'|'closed'|'interrupted'} status
+ * @property {string} started_at
+ * @property {string|null} ended_at
+ * @property {Record<string, any>} start_pose
+ * @property {Record<string, any>|null} end_pose
+ * @property {Record<string, any>} metadata
+ * @property {string} updated_at
+ */
+
 /** @param {number} value @param {number} length */
 function encodeBase32(value, length) {
   let remaining = value;
@@ -51,12 +66,16 @@ export function createDashboardSync(options) {
   const isOnline = options.isOnline || (() =>
     typeof navigator === 'undefined' ? true : navigator.onLine !== false
   );
+  /** @type {string | null} */
   let userId = null;
+  /** @type {CloudSession | null} */
   let session = null;
   let sequence = 0;
+  /** @type {Promise<boolean> | null} */
   let flushPromise = null;
   let telemetryRecordedAt = 0;
   let snapshotSavedAt = 0;
+  /** @type {ReturnType<typeof setInterval> | null} */
   let periodicTimer = null;
   let disposed = false;
   let state = {

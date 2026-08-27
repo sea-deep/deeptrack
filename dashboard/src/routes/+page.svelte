@@ -180,34 +180,44 @@
 
     <section class="flowchart-section">
       <div class="section-heading">
-        <span>How it works</span>
-        <h2>Time-of-Flight (ToF) Sensing</h2>
-        <p>The VL53L0X sensor provides millimeter-accurate distance readings by measuring how long it takes for light to bounce back from an obstacle.</p>
+        <span>Architecture</span>
+        <h2>Dual-ESP32 Responsibility Split</h2>
+        <p>DeepTrack physically isolates mission-critical safety from high-level interfaces using two distinct microcontrollers linked wirelessly.</p>
       </div>
 
-      <div class="flowchart-container">
-        <div class="flow-step">
-          <div class="step-icon"><span class="material-symbols-rounded">sensors</span></div>
-          <h4>1. Pulse Emission</h4>
-          <p>The sensor emits a 940nm invisible laser pulse towards the target.</p>
+      <div class="track-container">
+        <div class="track-node">
+          <div class="node-icon"><span class="material-symbols-rounded">memory</span></div>
+          <div class="node-content">
+            <h4>1. Rover ESP32</h4>
+            <p>Runs the rover's core hardware loop. Reads all physical sensors, enforces local collision protection, actuates the four-wheel chassis, and broadcasts telemetry.</p>
+          </div>
         </div>
-        <div class="flow-arrow"><span class="material-symbols-rounded">arrow_forward</span></div>
-        <div class="flow-step">
-          <div class="step-icon"><span class="material-symbols-rounded">sports_tennis</span></div>
-          <h4>2. Reflection</h4>
-          <p>The photons hit the obstacle and bounce back towards the rover.</p>
+
+        <div class="track-link">
+          <span class="material-symbols-rounded">wifi</span>
+          <small>Wireless ESP-NOW Data Link</small>
         </div>
-        <div class="flow-arrow"><span class="material-symbols-rounded">arrow_forward</span></div>
-        <div class="flow-step">
-          <div class="step-icon"><span class="material-symbols-rounded">timer</span></div>
-          <h4>3. Time Measurement</h4>
-          <p>An avalanche photodiode measures the exact time of flight.</p>
+
+        <div class="track-node">
+          <div class="node-icon"><span class="material-symbols-rounded">router</span></div>
+          <div class="node-content">
+            <h4>2. Gateway ESP32</h4>
+            <p>Stays connected to the laptop. Listens for rover packets, maintains a strict heartbeat watchdog, and bridges the data as a USB NDJSON stream.</p>
+          </div>
         </div>
-        <div class="flow-arrow"><span class="material-symbols-rounded">arrow_forward</span></div>
-        <div class="flow-step">
-          <div class="step-icon"><span class="material-symbols-rounded">memory</span></div>
-          <h4>4. CPU Processing</h4>
-          <p>The ESP32 reads the distance via I2C and halts motors if too close.</p>
+        
+        <div class="track-link">
+          <span class="material-symbols-rounded">usb</span>
+          <small>USB Serial Connection</small>
+        </div>
+
+        <div class="track-node">
+          <div class="node-icon"><span class="material-symbols-rounded">laptop_mac</span></div>
+          <div class="node-content">
+            <h4>3. Operator Dashboard</h4>
+            <p>The web interface on your computer. Parses the NDJSON stream to provide a live UI, estimated pose mapping, and sends remote drive commands back down the chain.</p>
+          </div>
         </div>
       </div>
     </section>
@@ -231,26 +241,6 @@
     align-items: center;
     gap: clamp(3rem, 6vw, 6.5rem);
     padding-block: clamp(4rem, 8vw, 7rem);
-  }
-
-  .prototype-kicker {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.65rem;
-    color: var(--md-sys-color-on-surface-variant);
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-  }
-
-  .prototype-dot {
-    width: 0.6rem;
-    height: 0.6rem;
-    border-radius: 50%;
-    background: var(--md-sys-color-primary);
-    box-shadow: 0 0 0 0.35rem color-mix(in srgb, var(--md-sys-color-primary) 16%, transparent);
   }
 
   h1 {
@@ -388,14 +378,6 @@
   .carousel-dots button.active {
     width: 2rem;
     background: var(--md-sys-color-primary);
-  }
-
-  .placeholder-note {
-    margin-top: 0.65rem;
-    color: var(--md-sys-color-on-surface-variant);
-    font-family: var(--font-mono);
-    font-size: 0.68rem;
-    text-align: center;
   }
 
   .feature-section,
@@ -554,28 +536,6 @@
     padding: 1.35rem;
   }
 
-  .prototype-note {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
-    max-width: 48rem;
-    margin: 3rem auto 0;
-    padding: 1.25rem;
-    border: 1px solid var(--md-sys-color-outline-variant);
-    border-radius: 1rem;
-    background: var(--md-sys-color-surface-container);
-  }
-
-  .prototype-note > span { color: var(--md-sys-color-primary); }
-  .prototype-note strong { font-size: 0.9rem; }
-
-  .prototype-note p {
-    margin-top: 0.2rem;
-    color: var(--md-sys-color-on-surface-variant);
-    font-size: 0.8rem;
-    line-height: 1.5;
-  }
-
   @media (max-width: 1024px) {
     .landing-hero {
       grid-template-columns: 1fr;
@@ -678,72 +638,110 @@
     margin-inline: auto;
   }
 
-  .flowchart-container {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 1.5rem;
-    max-width: 64rem;
-    margin: 3.5rem auto 0;
-    padding-inline: 1.5rem;
-  }
-
-  .flow-step {
-    flex: 1;
+  .track-container {
     display: flex;
     flex-direction: column;
     align-items: center;
-    text-align: center;
-    padding: 2.2rem 1.2rem;
+    max-width: 48rem;
+    margin: 4rem auto 0;
+    padding-inline: 1.5rem;
+  }
+
+  .track-node {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    width: 100%;
+    padding: 2.5rem;
     background: #ffffff;
     border: 1px solid #e1e7e8;
-    border-radius: 1rem;
+    border-radius: 1.5rem;
     box-shadow: 0 8px 24px rgb(0 26 28 / 0.04);
-    min-height: 16rem;
+    position: relative;
+    z-index: 2;
   }
 
-  .step-icon {
+  .track-node:nth-child(even) {
+    flex-direction: row-reverse;
+    text-align: right;
+  }
+
+  .node-icon {
     display: grid;
-    width: 3.8rem;
-    height: 3.8rem;
+    width: 5rem;
+    height: 5rem;
+    flex-shrink: 0;
     place-items: center;
-    border-radius: 1rem;
+    border-radius: 1.25rem;
     background: #a5f0ff;
     color: #001a1c;
-    margin-bottom: 1.5rem;
-  }
-  
-  .step-icon .material-symbols-rounded {
-    font-size: 1.6rem;
   }
 
-  .flow-step h4 {
-    font-size: 1rem;
+  .node-icon .material-symbols-rounded {
+    font-size: 2.2rem;
+  }
+
+  .node-content h4 {
+    font-size: 1.25rem;
     font-weight: 700;
     color: #001a1c;
     margin-bottom: 0.75rem;
   }
 
-  .flow-step p {
-    font-size: 0.8rem;
+  .node-content p {
+    font-size: 0.95rem;
     color: #556667;
     line-height: 1.6;
     margin: 0;
   }
 
-  .flow-arrow {
-    color: #8c9b9d;
-    font-size: 1.2rem;
-    flex-shrink: 0;
+  .track-link {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 6rem;
+    gap: 0.5rem;
+    color: #0b6b72;
+    position: relative;
+    z-index: 1;
   }
 
-  @media (max-width: 900px) {
-    .flowchart-container {
+  .track-link::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    z-index: -1;
+    border-left: 2px dashed #0b6b72;
+    opacity: 0.4;
+  }
+
+  .track-link span {
+    background: #f4f7f8;
+    padding: 0.5rem;
+    border-radius: 50%;
+    font-size: 1.5rem;
+  }
+  
+  .track-link small {
+    background: #f4f7f8;
+    padding: 0.2rem 0.8rem;
+    border-radius: 99px;
+    font-weight: 600;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+  }
+  
+  @media (max-width: 760px) {
+    .track-node, .track-node:nth-child(even) {
       flex-direction: column;
+      text-align: center;
       gap: 1.5rem;
-    }
-    .flow-arrow {
-      transform: rotate(90deg);
+      padding: 2rem 1.5rem;
     }
   }
 </style>

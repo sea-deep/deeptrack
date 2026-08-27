@@ -253,7 +253,10 @@
     // occupancy grid or planner cost map.
     if (hazardZones.length) {
       ctx.save();
-      hazardZones.forEach((/** @type {{x:number,y:number,score:number,state:string,simulated?:boolean}} */ zone, index) => {
+      hazardZones.forEach((
+        /** @type {{x:number,y:number,score:number,state:string,simulated?:boolean}} */ zone,
+        /** @type {number} */ index
+      ) => {
         const zx = cx + zone.x * zoom;
         const zy = cy + zone.y * zoom;
         const critical = zone.state === 'CRITICAL';

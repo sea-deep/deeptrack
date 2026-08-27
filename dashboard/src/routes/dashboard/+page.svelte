@@ -93,7 +93,9 @@
     online: true, status: 'idle', pending: 0,
     lastSyncedAt: null, lastError: ''
   });
+  /** @type {string | null} */
   let cloudSyncUserId = null;
+  /** @type {number | null} */
   let cloudGatewaySession = null;
   let lastCloudMapAt = 0;
   let lastSentinelRecordState = 'NORMAL';
@@ -249,6 +251,7 @@
     realLogs = Array.isArray(value.logs) ? value.logs : [];
   }
 
+  /** @param {string} userId */
   async function initializeCloudSync(userId) {
     if (!userId || cloudSyncUserId === userId) return;
     dashboardSync.dispose();
@@ -261,6 +264,7 @@
     await restoreHardwareSnapshot();
   }
 
+  /** @param {Record<string, any>} packet */
   async function ensureCloudSession(packet) {
     if (missionMode !== 'hardware' || !cloudSyncUserId ||
         !Number.isInteger(packet.session)) return;
