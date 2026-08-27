@@ -5,10 +5,10 @@
   import { fade } from 'svelte/transition';
 
   const roverViews = [
-    { src: '/images/rover/rover-front-left.png', angle: 'Front left', note: 'Sensor mast and front obstacle sensors' },
-    { src: '/images/rover/rover-front-right.png', angle: 'Front right', note: 'Drive electronics and four-wheel chassis' },
-    { src: '/images/rover/rover-rear.png', angle: 'Rear view', note: 'Power, motor drivers and protected wiring' },
-    { src: '/images/rover/rover-top.png', angle: 'Top view', note: 'Controller and environmental sensors' }
+    { src: '/images/rover/rover-front-left.webp', angle: 'Front left', note: 'Sensor mast and front obstacle sensors' },
+    { src: '/images/rover/rover-front-right.webp', angle: 'Front right', note: 'Drive electronics and four-wheel chassis' },
+    { src: '/images/rover/rover-rear.webp', angle: 'Rear view', note: 'Power, motor drivers and protected wiring' },
+    { src: '/images/rover/rover-top.webp', angle: 'Top view', note: 'Controller and environmental sensors' }
   ];
 
   const features = [
@@ -19,14 +19,14 @@
   ];
 
   const hardware = [
-    { image: '/images/components/esp32.png?v=3', name: 'ESP32 controller', tag: 'Control', copy: 'Reads the sensors, runs the rover logic and sends updates to the gateway.' },
-    { image: '/images/components/mq4.png?v=3', name: 'MQ-4 gas sensor', tag: 'Air', copy: 'Reports raw methane-sensitive activity. It is useful for trends, not certified safety readings.' },
-    { image: '/images/components/dht.png?v=3', name: 'DHT22 sensor', tag: 'Climate', copy: 'Measures the temperature and relative humidity around the rover.' },
-    { image: '/images/components/hypersonic.png?v=3', name: 'HC-SR04 sonar', tag: 'Distance', copy: 'Checks the space directly ahead and helps stop the rover before it reaches an obstacle.' },
-    { image: '/images/components/encoder.png?v=3', name: 'Optical encoder', tag: 'Motion', copy: 'Measures wheel rotation to estimate speed and distance traveled.' },
-    { image: '/images/components/mpu.png?v=3', name: 'MPU6050 IMU', tag: 'Tilt', copy: 'Adds tilt and movement context when the rover travels over uneven ground.' },
-    { image: '/images/components/vl53l0x.png?v=5', name: 'VL53L0X ToF', tag: 'Distance', copy: 'High-precision Time-of-Flight laser sensor for millimeter-accurate obstacle detection.' },
-    { image: '/images/components/chasis.png?v=3', name: '4WD drive system', tag: 'Drive', copy: 'Four geared motors and two motor drivers provide simple skid-steer movement.' }
+    { image: '/images/components/esp32.webp', name: 'ESP32 controller', tag: 'Control', copy: 'Reads the sensors, runs the rover logic and sends updates to the gateway.' },
+    { image: '/images/components/mq4.webp', name: 'MQ-4 gas sensor', tag: 'Air', copy: 'Reports raw methane-sensitive activity. It is useful for trends, not certified safety readings.' },
+    { image: '/images/components/dht.webp', name: 'DHT22 sensor', tag: 'Climate', copy: 'Measures the temperature and relative humidity around the rover.' },
+    { image: '/images/components/hypersonic.webp', name: 'HC-SR04 sonar', tag: 'Distance', copy: 'Checks the space directly ahead and helps stop the rover before it reaches an obstacle.' },
+    { image: '/images/components/encoder.webp', name: 'Optical encoder', tag: 'Motion', copy: 'Measures wheel rotation to estimate speed and distance traveled.' },
+    { image: '/images/components/mpu.webp', name: 'MPU6050 IMU', tag: 'Tilt', copy: 'Adds tilt and movement context when the rover travels over uneven ground.' },
+    { image: '/images/components/vl53l0x.webp', name: 'VL53L0X ToF', tag: 'Distance', copy: 'High-precision Time-of-Flight laser sensor for millimeter-accurate obstacle detection.' },
+    { image: '/images/components/chasis.webp', name: '4WD drive system', tag: 'Drive', copy: 'Four geared motors and two motor drivers provide simple skid-steer movement.' }
   ];
 
   let activeView = $state(0);
@@ -54,6 +54,11 @@
   }
 
   onMount(() => {
+    for (const { src } of roverViews.slice(1)) {
+      const image = new Image();
+      image.decoding = 'async';
+      image.src = src;
+    }
     const interval = window.setInterval(showNextView, 4200);
     return () => window.clearInterval(interval);
   });
@@ -101,6 +106,9 @@
             <img
               src={roverViews[activeView].src}
               alt={`DeepTrack rover — ${roverViews[activeView].angle}`}
+              width="960"
+              height="720"
+              fetchpriority={activeView === 0 ? 'high' : 'auto'}
               in:fade={{ duration: 480 }}
               out:fade={{ duration: 220 }}
             />
@@ -165,7 +173,7 @@
         {#each hardware as part}
           <article class="hardware-card">
             <div class="component-image">
-              <img src={part.image} alt={part.name} loading="lazy" />
+              <img src={part.image} alt={part.name} loading="lazy" decoding="async" width="600" height="600" />
               <span>{part.tag}</span>
             </div>
             <div class="component-copy">

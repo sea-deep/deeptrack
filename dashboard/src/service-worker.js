@@ -9,7 +9,11 @@ const worker = /** @type {ServiceWorkerGlobalScope} */ (
   /** @type {unknown} */ (globalThis)
 );
 const CACHE = `deeptrack-shell-${version}`;
-const APP_ASSETS = [...new Set([...build, ...files])];
+// Large landing-page photos are runtime-cached when visited. Keeping them out
+// of the install transaction makes the offline shell available immediately
+// and avoids one missing photo preventing service-worker activation.
+const PRECACHE_FILES = files.filter((path) => !path.startsWith('/images/'));
+const APP_ASSETS = [...new Set([...build, ...PRECACHE_FILES])];
 
 worker.addEventListener('install', (event) => {
   event.waitUntil((async () => {
