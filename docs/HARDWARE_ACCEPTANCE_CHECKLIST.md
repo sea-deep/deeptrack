@@ -89,7 +89,7 @@ Use barriers that cannot trap or damage the rover.
 - Demo mode: complete simulated judge flow and zero USB connection controls.
 - Real mode: observations begin unknown; USB, radio, rover-link, armed, stale,
   blocked, rejected, and stuck states remain distinguishable.
-- Real controls stay disabled until protocol-1 hello, configured radio, fresh
+- Real controls stay disabled until protocol-2 hello, configured radio, fresh
   rover telemetry, browser heartbeat, and explicit arm.
 - Invalid scans stay invalid/null and never become free space.
 - Pose remains unknown without track-width and distance-per-tick calibration.

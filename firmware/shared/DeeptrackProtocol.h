@@ -10,7 +10,7 @@ namespace DeepTrack {
 namespace Protocol {
 
 constexpr uint16_t PACKET_MAGIC = 0xD33F;
-constexpr uint8_t PROTOCOL_VERSION = 1;
+constexpr uint8_t PROTOCOL_VERSION = 2;
 constexpr size_t ESP_NOW_V1_MAX_PAYLOAD_BYTES = 250;
 
 constexpr uint16_t BROWSER_HEARTBEAT_INTERVAL_MS = 150;
@@ -179,6 +179,12 @@ struct __attribute__((packed)) TelemetryPacket {
   PacketHeader header;
   int32_t left_ticks;
   int32_t right_ticks;
+  uint32_t left_raw_ticks;
+  uint32_t right_raw_ticks;
+  uint32_t left_rejected_debounce_ticks;
+  uint32_t right_rejected_debounce_ticks;
+  uint32_t left_rejected_state_ticks;
+  uint32_t right_rejected_state_ticks;
   uint16_t heading_cdeg;
   int16_t pitch_cdeg;
   int16_t roll_cdeg;
@@ -191,6 +197,8 @@ struct __attribute__((packed)) TelemetryPacket {
   uint16_t chassis_width_mm;
   uint16_t track_width_mm;
   uint16_t micrometers_per_tick;
+  uint16_t left_micrometers_per_tick;
+  uint16_t right_micrometers_per_tick;
   int16_t temperature_centi_c;
   uint16_t humidity_centi_pct;
   uint16_t status_flags;
@@ -259,7 +267,7 @@ struct __attribute__((packed)) DiagnosticResultPacket {
 
 static_assert(sizeof(PacketHeader) == 16,
               "PacketHeader wire layout changed; bump the protocol version intentionally");
-static_assert(sizeof(TelemetryPacket) == 60,
+static_assert(sizeof(TelemetryPacket) == 88,
               "TelemetryPacket wire layout changed; bump the protocol version intentionally");
 static_assert(sizeof(CommandPacket) == 22,
               "CommandPacket wire layout changed; bump the protocol version intentionally");

@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import * as THREE from 'three';
+  import { roverCalibration } from '$lib/config/roverCalibration.js';
 
   let {
     pitchDeg = null,
@@ -18,13 +18,25 @@
   let canvas;
   let animationFrameId = 0;
   let prefersReducedMotion = false;
+  let requestRender = () => {};
 
   // MPU +X points toward the chassis front in the supplied mounting reference.
   // Convert the 90-degree-rotated sensor frame into chassis pitch and roll.
   let hasOrientation = $derived(Number.isFinite(pitchDeg) && Number.isFinite(rollDeg));
-  let chassisPitch = $derived(hasOrientation ? -Number(rollDeg) : 0);
-  let chassisRoll = $derived(hasOrientation ? Number(pitchDeg) : 0);
-  let chassisHeading = $derived(Number.isFinite(headingDeg) ? Number(headingDeg) : 0);
+  let chassisPitch = $derived(hasOrientation
+    ? (roverCalibration.imuMount.chassisPitchFrom === 'roll'
+        ? Number(rollDeg) : Number(pitchDeg)) *
+        roverCalibration.imuMount.chassisPitchSign +
+        roverCalibration.imuMount.chassisPitchOffsetDeg : 0);
+  let chassisRoll = $derived(hasOrientation
+    ? (roverCalibration.imuMount.chassisRollFrom === 'pitch'
+        ? Number(pitchDeg) : Number(rollDeg)) *
+        roverCalibration.imuMount.chassisRollSign +
+        roverCalibration.imuMount.chassisRollOffsetDeg : 0);
+  let chassisHeading = $derived(Number.isFinite(headingDeg)
+    ? ((Number(headingDeg) * roverCalibration.imuMount.chassisYawSign +
+        roverCalibration.imuMount.chassisYawOffsetDeg) % 360 + 360) % 360
+    : 0);
   let maxInclination = $derived(Math.max(Math.abs(chassisPitch), Math.abs(chassisRoll)));
   let stabilityStatus = $derived(
     !hasOrientation ? 'unknown'
@@ -35,6 +47,13 @@
               : 'level'
   );
 
+  // Wake the renderer only when orientation-related inputs change. The
+  // renderer stops itself once the damped model reaches the new pose.
+  $effect(() => {
+    void [chassisPitch, chassisRoll, chassisHeading, isStale, isCalibrating];
+    requestRender();
+  });
+
   /** @param {number} value */
   const signed = (value) => `${value > 0 ? '+' : ''}${value.toFixed(1)}°`;
   /** @param {string} status */
@@ -44,14 +63,23 @@
   })[status];
 
   onMount(() => {
+    let disposed = false;
+    let disposeScene = () => {};
+    void import('three').then((THREE) => {
+    if (disposed) return;
     prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
     camera.position.set(5.8, 4.4, 7.2);
     camera.lookAt(0, 0.15, 0);
 
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      alpha: true,
+      antialias: (window.devicePixelRatio || 1) <= 1.25,
+      powerPreference: 'low-power'
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
@@ -84,26 +112,26 @@
 
     for (const z of [-1.2, 1.2]) {
       for (const x of [-1.62, 1.62]) {
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.58, 0.46, 28), tyre);
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.58, 0.46, 16), tyre);
         wheel.rotation.z = Math.PI / 2;
         wheel.position.set(x, 0, z);
         rover.add(wheel);
-        const wheelHub = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.48, 24), hub);
+        const wheelHub = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.48, 12), hub);
         wheelHub.rotation.z = Math.PI / 2;
         wheelHub.position.copy(wheel.position);
         rover.add(wheelHub);
       }
     }
 
-    const mastPost = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.25, 20), mast);
+    const mastPost = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.25, 12), mast);
     mastPost.position.set(0, 1.55, -1.16);
     rover.add(mastPost);
-    const sensorHead = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.3, 5, 16), dark);
+    const sensorHead = new THREE.Mesh(new THREE.CapsuleGeometry(0.26, 0.3, 4, 10), dark);
     sensorHead.rotation.z = Math.PI / 2;
     sensorHead.position.set(0, 2.16, -1.16);
     rover.add(sensorHead);
     const lensMaterial = new THREE.MeshStandardMaterial({ color: 0x75e8ff, emissive: 0x164e63, emissiveIntensity: 1.5 });
-    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.05, 18), lensMaterial);
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.05, 10), lensMaterial);
     lens.rotation.x = Math.PI / 2;
     lens.position.set(0, 2.16, -1.48);
     rover.add(lens);
@@ -114,7 +142,7 @@
     rover.add(frontMarker);
 
     const platform = new THREE.Mesh(
-      new THREE.CircleGeometry(3.9, 64),
+      new THREE.CircleGeometry(3.9, 32),
       new THREE.MeshStandardMaterial({ color: 0x2b3947, roughness: 0.95, transparent: true, opacity: 0.34 })
     );
     platform.rotation.x = -Math.PI / 2;
@@ -140,11 +168,17 @@
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
     };
-    const resizeObserver = new ResizeObserver(resize);
-    resizeObserver.observe(host);
-    resize();
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null : new ResizeObserver(resize);
+    resizeObserver?.observe(host);
+    if (!resizeObserver) window.addEventListener('resize', resize);
 
+    let isRendering = false;
     const animate = () => {
+      if (document.hidden) {
+        isRendering = false;
+        return;
+      }
       const damping = prefersReducedMotion || isStale ? 1 : 0.12;
       shownPitch += (chassisPitch - shownPitch) * damping;
       shownRoll += (chassisRoll - shownRoll) * damping;
@@ -157,13 +191,32 @@
         'YXZ'
       );
       renderer.render(scene, camera);
+      const unsettled = !prefersReducedMotion && !isStale && (
+        Math.abs(chassisPitch - shownPitch) > 0.05 ||
+        Math.abs(chassisRoll - shownRoll) > 0.05 ||
+        Math.abs(((chassisHeading - shownHeading + 540) % 360) - 180) > 0.08
+      );
+      if (unsettled) animationFrameId = requestAnimationFrame(animate);
+      else isRendering = false;
+    };
+    requestRender = () => {
+      if (isRendering) return;
+      isRendering = true;
       animationFrameId = requestAnimationFrame(animate);
     };
-    animate();
+    const handleVisibility = () => {
+      if (!document.hidden) requestRender();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    resize();
+    requestRender();
 
-    return () => {
+    disposeScene = () => {
+      requestRender = () => {};
       cancelAnimationFrame(animationFrameId);
-      resizeObserver.disconnect();
+      resizeObserver?.disconnect();
+      if (!resizeObserver) window.removeEventListener('resize', resize);
+      document.removeEventListener('visibilitychange', handleVisibility);
       scene.traverse((item) => {
         if (item instanceof THREE.Mesh) {
           item.geometry?.dispose();
@@ -173,37 +226,43 @@
       });
       renderer.dispose();
     };
+    }).catch(() => { requestRender = () => {}; });
+
+    return () => {
+      disposed = true;
+      disposeScene();
+    };
   });
 </script>
 
-<div class="flex h-full min-h-[280px] w-full flex-col select-none">
+<div data-tilt-horizon class="flex h-full min-h-[280px] w-full flex-col select-none">
   <div bind:this={host} class="relative min-h-[190px] flex-1 overflow-hidden rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[radial-gradient(circle_at_50%_28%,rgba(77,208,225,0.14),transparent_58%)]">
     <canvas bind:this={canvas} class:opacity-45={isStale || !hasOrientation} class="block h-full w-full"></canvas>
-    <div class="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/85 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide backdrop-blur">
+    <div class="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/85 px-2.5 py-1 text-xs font-bold uppercase tracking-wide backdrop-blur">
       <span class="h-2 w-2 rounded-full" class:bg-[var(--ui-color-success)]={stabilityStatus === 'level'} class:bg-[var(--ui-color-warning)]={stabilityStatus === 'caution'} class:bg-[var(--md-sys-color-error)]={stabilityStatus === 'critical'} class:bg-[var(--md-sys-color-outline)]={['unknown','stale','calibrating'].includes(stabilityStatus)}></span>
       {statusLabel(stabilityStatus)}
     </div>
-    <div class="pointer-events-none absolute right-3 top-3 rounded-full border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/85 px-2.5 py-1 text-[10px] font-semibold text-[var(--md-sys-color-on-surface-variant)] backdrop-blur">Front ▲</div>
+    <div class="pointer-events-none absolute right-3 top-3 rounded-full border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/85 px-2.5 py-1 text-xs font-semibold text-[var(--md-sys-color-on-surface-variant)] backdrop-blur">Front ▲</div>
     {#if !hasOrientation || isStale || isCalibrating}
       <div class="pointer-events-none absolute inset-0 grid place-items-center">
-        <div class="rounded-lg border border-white/15 bg-black/75 px-3 py-1.5 text-[11px] font-medium text-white shadow-lg backdrop-blur">{statusLabel(stabilityStatus)}</div>
+        <div class="rounded-lg border border-white/15 bg-black/75 px-3 py-1.5 text-sm font-medium text-white shadow-lg backdrop-blur">{statusLabel(stabilityStatus)}</div>
       </div>
     {/if}
   </div>
 
   <div class="mt-3 grid grid-cols-3 gap-2">
     <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] px-2.5 py-2">
-      <div class="text-[9px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">Pitch</div>
+      <div class="text-xs font-bold uppercase tracking-wide text-[var(--md-sys-color-on-surface-variant)]">Pitch</div>
       <div class="telemetry mt-0.5 text-sm font-bold">{hasOrientation ? signed(chassisPitch) : '—'}</div>
     </div>
     <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] px-2.5 py-2 text-center">
-      <div class="text-[9px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">Relative yaw</div>
+      <div class="text-xs font-bold uppercase tracking-wide text-[var(--md-sys-color-on-surface-variant)]">Relative yaw</div>
       <div class="telemetry mt-0.5 text-sm font-bold">{Number.isFinite(headingDeg) ? `${Math.round(chassisHeading)}°` : '—'}</div>
     </div>
     <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] px-2.5 py-2 text-right">
-      <div class="text-[9px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">Roll</div>
+      <div class="text-xs font-bold uppercase tracking-wide text-[var(--md-sys-color-on-surface-variant)]">Roll</div>
       <div class="telemetry mt-0.5 text-sm font-bold">{hasOrientation ? signed(chassisRoll) : '—'}</div>
     </div>
   </div>
-  <div class="mt-1.5 text-center text-[9px] text-[var(--md-sys-color-on-surface-variant)]">90° MPU mount correction applied · yaw is gyro-relative</div>
+  <div class="mt-1.5 text-center text-[11px] leading-tight text-[var(--md-sys-color-on-surface-variant)]">90° MPU mount correction + reversed yaw axis · yaw is gyro-relative</div>
 </div>

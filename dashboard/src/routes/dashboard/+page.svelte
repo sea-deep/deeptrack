@@ -3,6 +3,7 @@
   import MetricTile from '$lib/components/MetricTile.svelte';
   import EstimatedRouteCanvas from '$lib/components/EstimatedRouteCanvas.svelte';
   import TiltHorizon from '$lib/components/TiltHorizon.svelte';
+  import AiRiskPanel from '$lib/components/AiRiskPanel.svelte';
   import SensorDetailModal from '$lib/components/SensorDetailModal.svelte';
   import MapsView from '$lib/components/dashboard/MapsView.svelte';
   import LogsView from '$lib/components/dashboard/LogsView.svelte';
@@ -14,6 +15,7 @@
   import { auth } from '$lib/stores/auth.svelte.js';
   import { initialTelemetry as demoTelemetry, initialScanPoints as demoScanPoints } from '$lib/mocks/telemetryMock.js';
   import { createUnknownTelemetry, createEmptyHistory, createDemoHistory } from '$lib/state/telemetry.js';
+  import { roverCalibration } from '$lib/config/roverCalibration.js';
   import {
     applyGatewayTelemetry, COMMAND_TTL_MS, DIAGNOSTIC_ACTION, DRIVE_REFRESH_MS,
     formatDiagnosticResult,
@@ -26,6 +28,16 @@
     addScanEvidence, createEstimatedMapState, renderableEvidence,
     updateEstimatedPose
   } from '$lib/state/estimatedMap.js';
+  import {
+    createMissionControllerState, startMission, stepMission, stopMission
+  } from '$lib/state/missionController.js';
+  import {
+    gateManualDrive, keyboardDriveVector, requestsForward
+  } from '$lib/state/manualDrive.js';
+  import { fitHeight } from '$lib/actions/fitHeight.js';
+  import {
+    createHazardEngine, createUnavailableHazardResult
+  } from '$lib/ai/hazardEngine.js';
   import { sendShared, receiveShared, m3TopLevelFadeThrough } from '$lib/utils/motion.js';
 
   /** @type {{initialMode?: 'demo' | 'hardware' | null}} */
@@ -60,16 +72,35 @@
   let realLogs = $state(/** @type {Array<any>} */ ([]));
   let diagnosticResults = $state(/** @type {Array<any>} */ ([]));
   let orientationCalibrating = $state(false);
+  let isArmPending = $state(false);
   let estimatedMapState = $state(/** @type {any} */ (createEstimatedMapState()));
   let realMapEvidence = $state(renderableEvidence(createEstimatedMapState()));
+  let missionController = $state(/** @type {any} */ (createMissionControllerState()));
+  let missionTickBusy = false;
+  let exploreBootstrapScanIds = $state(/** @type {number[]} */ ([]));
+  let exploreBootstrapStartedAt = 0;
+  let exploreBootstrapRequestedAt = 0;
+  /** @type {ReturnType<typeof createHazardEngine> | null} */
+  let hazardEngine = null;
+  let sentinelResult = $state(createUnavailableHazardResult());
+  let sentinelDemoActive = $state(false);
+  let sentinelDemoStartedAt = 0;
+  let lastHazardZoneAt = 0;
+  let hazardZones = $state(/** @type {Array<{x:number,y:number,score:number,state:string,simulated:boolean}>} */ ([]));
 
   // --- Console Specific State ---
   /** @type {'MANUAL' | 'AUTO_EXPLORE'} */
   let controlMode = $state('MANUAL');
   let isRecordingMap = $state(false);
   let isAutoPaused = $state(false);
-  let roverPose = $state({ x: 0, y: 0, headingDeg: 90 });
+  let roverPose = $state(/** @type {{x:number,y:number,headingDeg:number}} */ ({
+    x: 0, y: 0, headingDeg: roverCalibration.scanner.forwardAngleDeg
+  }));
   let speedPercent = $state(55);
+  /** @type {number | null} */
+  let activeDrivePointerId = null;
+  /** @type {'pointer'|'keyboard'|null} */
+  let manualInputSource = null;
 
   // Real mode starts with no fixtures. Demo fixtures enter only through launchDemo().
   let telemetry = $state(/** @type {import('$lib/state/telemetry.js').TelemetryState} */ (createUnknownTelemetry()));
@@ -79,12 +110,65 @@
     telemetry.source === 'LIVE' && heartbeatAgeMs !== null &&
     heartbeatAgeMs <= TELEMETRY_STALE_MS
   );
+  const COMMAND_ARMED_FLAG = 1 << 11;
+  let roverCommandArmed = $derived(
+    missionMode === 'demo' ||
+      (typeof telemetry.statusFlags === 'number' &&
+       (telemetry.statusFlags & COMMAND_ARMED_FLAG) !== 0)
+  );
   let hardwareControlReady = $derived(
     missionMode === 'demo'
       ? isConnected && !isEstop
-      : isConnected && gatewayRadioReady && gatewayArmed && roverLinkFresh && !isEstop
+      : isConnected && gatewayRadioReady && gatewayArmed &&
+        roverCommandArmed && roverLinkFresh && !isEstop
   );
+  let manualForwardAllowed = $derived(
+    hardwareControlReady && telemetry.frontValid === true &&
+      telemetry.frontFresh === true && telemetry.frontBlocked === false
+  );
+  let manualControlStatus = $derived.by(() => {
+    if (missionMode === 'demo') return 'Demo controls are available.';
+    if (!isConnected || transportMode !== 'SERIAL')
+      return 'Connect the gateway to enable controls.';
+    if (!gatewayRadioReady) return 'Gateway radio is unavailable.';
+    if (isEstop) return 'Remote stop is latched. Clear it, then arm controls.';
+    if (isArmPending || (gatewayArmed && !roverCommandArmed))
+      return 'Waiting for the rover to confirm the armed command session…';
+    if (!gatewayArmed) return 'Arm controls to enable WASD and the direction pad.';
+    if (!roverLinkFresh) return 'Controls held: rover telemetry is stale.';
+    if (!manualForwardAllowed)
+      return 'Forward held by front safety. Reverse and pivot remain available.';
+    return 'Manual control ready.';
+  });
+  let exploreControlReady = $derived(
+    missionMode === 'demo'
+      ? hardwareControlReady
+      : hardwareControlReady && estimatedMapState.calibration !== null &&
+        estimatedMapState.pose.known && telemetry.frontValid === true &&
+        telemetry.frontFresh === true
+  );
+  let missionWaypoint = $derived(missionController.goal ? {
+    x_m: (missionController.goal.x + 0.5) *
+      (realMapEvidence.cellSizeM || 0.05),
+    y_m: (missionController.goal.y + 0.5) *
+      (realMapEvidence.cellSizeM || 0.05)
+  } : null);
   let tofStatus = $derived(tofDisplayState(telemetry, scanPoints));
+  let distanceFromDeploymentM = $derived(
+    missionMode === 'demo'
+      ? Math.hypot(roverPose.x, roverPose.y) /
+        roverCalibration.map.pixelsPerMeter
+      : estimatedMapState.pose.known
+        ? Math.hypot(
+            estimatedMapState.pose.x_m - roverCalibration.pose.startXM,
+            estimatedMapState.pose.y_m - roverCalibration.pose.startYM)
+        : null
+  );
+  let distanceFromDeploymentNote = $derived(
+    missionMode === 'demo' ? 'Simulated deployment radius'
+      : estimatedMapState.pose.known ? 'Estimated from session origin'
+        : 'Calibrated pose required'
+  );
 
   // Modal State
   let selectedSensorKey = $state(/** @type {string | null} */ (null));
@@ -104,7 +188,8 @@
     isEstopPending = false;
     currentMotorL = 0;
     currentMotorR = 0;
-    roverPose = { x: 0, y: 0, headingDeg: 90 };
+    roverPose = { x: 0, y: 0,
+      headingDeg: roverCalibration.scanner.forwardAngleDeg };
     heartbeatAgeMs = null;
     gatewaySession = null;
     gatewayRadioReady = false;
@@ -113,8 +198,20 @@
     lastTelemetryReceivedAt = 0;
     realLogs = [];
     diagnosticResults = [];
+    isArmPending = false;
     estimatedMapState = createEstimatedMapState();
+    missionController = createMissionControllerState();
+    exploreBootstrapScanIds = [];
+    exploreBootstrapStartedAt = 0;
+    exploreBootstrapRequestedAt = 0;
+    sentinelDemoActive = false;
+    sentinelDemoStartedAt = 0;
+    lastHazardZoneAt = 0;
+    hazardZones = [];
+    sentinelResult = hazardEngine?.reset() || createUnavailableHazardResult();
     realMapEvidence = renderableEvidence(estimatedMapState);
+    activeDrivePointerId = null;
+    manualInputSource = null;
     stopDriveRefresh();
   }
 
@@ -202,6 +299,7 @@
       }
       gatewayRadioReady = packet.radio_ready === true;
       gatewayArmed = packet.armed === true;
+      if (!gatewayArmed) isArmPending = false;
       serialConnectionError = '';
       if (!gatewayArmed) {
         currentMotorL = 0;
@@ -214,13 +312,15 @@
     if (!shouldAcceptGatewayRecord(packet, gatewaySession)) return;
     if (packet.type === 'telemetry') {
       telemetry = applyGatewayTelemetry(telemetry, packet);
+      if (gatewayArmed && roverCommandArmed) isArmPending = false;
       estimatedMapState = updateEstimatedPose(estimatedMapState, packet);
       realMapEvidence = renderableEvidence(estimatedMapState);
       if (estimatedMapState.pose.known) {
         roverPose = {
-          x: estimatedMapState.pose.x_m * 40,
-          y: estimatedMapState.pose.y_m * 40,
-          headingDeg: estimatedMapState.pose.heading_rad * 180 / Math.PI + 90
+          x: estimatedMapState.pose.x_m * roverCalibration.map.pixelsPerMeter,
+          y: estimatedMapState.pose.y_m * roverCalibration.map.pixelsPerMeter,
+          headingDeg: estimatedMapState.pose.heading_rad * 180 / Math.PI +
+            roverCalibration.scanner.forwardAngleDeg
         };
       }
       lastTelemetryReceivedAt = performance.now();
@@ -233,13 +333,27 @@
       historyBuffers.roll = [...historyBuffers.roll.slice(-29), ...(telemetry.rollDeg === null ? [] : [telemetry.rollDeg])];
     } else if (packet.type === 'scan') {
       scanPoints = upsertScanPoint(scanPoints, packet);
+      if (missionController.mode === 'EXPLORE' &&
+          missionController.status === 'SCANNING' &&
+          Number.isInteger(packet.scan_id) &&
+          !exploreBootstrapScanIds.includes(packet.scan_id)) {
+        exploreBootstrapScanIds = [...exploreBootstrapScanIds, packet.scan_id];
+      }
       estimatedMapState = addScanEvidence(
-        estimatedMapState, [packet], performance.now()
+        estimatedMapState, [packet],
+        Number.isFinite(packet.timestamp_ms) ? packet.timestamp_ms : performance.now()
       );
       realMapEvidence = renderableEvidence(estimatedMapState);
     } else if (packet.type === 'event') {
       appendRealLog(packet);
-      if (packet.code === 'GATEWAY_STOP') gatewayArmed = false;
+      if (packet.code === 'ARMED') {
+        gatewayArmed = true;
+        isArmPending = true;
+      } else if (packet.code === 'GATEWAY_STOP' ||
+                 packet.code === 'ARM_REJECTED') {
+        gatewayArmed = false;
+        isArmPending = false;
+      }
     } else if (packet.type === 'diagnostic') {
       try {
         const result = formatDiagnosticResult(packet);
@@ -270,6 +384,7 @@
     gatewaySession = null;
     gatewayRadioReady = false;
     gatewayArmed = false;
+    isArmPending = false;
     heartbeatAgeMs = null;
     currentMotorL = 0;
     currentMotorR = 0;
@@ -417,16 +532,27 @@
   // --- Motor Commands ---
   /** @param {number} left @param {number} right */
   async function sendDrive(left, right) {
-    if (!hardwareControlReady || controlMode !== 'MANUAL') {
-      currentMotorL = 0;
-      currentMotorR = 0;
+    const gated = gateManualDrive(left, right, {
+      controlReady: hardwareControlReady,
+      manualMode: controlMode === 'MANUAL',
+      forwardAllowed: manualForwardAllowed
+    });
+    currentMotorL = gated.left;
+    currentMotorR = gated.right;
+    if (gated.reason === 'CONTROL_LOCKED') return;
+    // Mirror the rover's fail-closed directional gate in the console. The
+    // firmware remains authoritative; this avoids presenting or repeatedly
+    // transmitting a forward request that is already known to be blocked.
+    if (gated.reason === 'FORWARD_HELD') {
+      if (missionMode === 'hardware')
+        await sendSessionCommand('drive', {
+          left: 0, right: 0, ttl_ms: COMMAND_TTL_MS
+        });
       return;
     }
-    currentMotorL = left;
-    currentMotorR = right;
     if (missionMode === 'hardware')
       await sendSessionCommand('drive', {
-        left, right, ttl_ms: COMMAND_TTL_MS
+        left: gated.left, right: gated.right, ttl_ms: COMMAND_TTL_MS
       });
   }
 
@@ -471,6 +597,31 @@
     }
   }
 
+  /** @param {PointerEvent} event @param {number} left @param {number} right */
+  function beginPointerDrive(event, left, right) {
+    if (!hardwareControlReady || controlMode !== 'MANUAL' ||
+        activeDrivePointerId !== null) return;
+    if (requestsForward(left, right) && !manualForwardAllowed) return;
+    activeDrivePointerId = event.pointerId;
+    manualInputSource = 'pointer';
+    const target = /** @type {HTMLElement | null} */ (event.currentTarget);
+    try { target?.setPointerCapture(event.pointerId); } catch {}
+    startHoldDrive(left, right);
+  }
+
+  /** @param {PointerEvent} event */
+  function endPointerDrive(event) {
+    if (activeDrivePointerId !== event.pointerId) return;
+    activeDrivePointerId = null;
+    manualInputSource = null;
+    const target = /** @type {HTMLElement | null} */ (event.currentTarget);
+    try {
+      if (target?.hasPointerCapture(event.pointerId))
+        target.releasePointerCapture(event.pointerId);
+    } catch {}
+    void releaseManualDrive();
+  }
+
   async function stopDriveMotion() {
     stopDriveRefresh();
     currentMotorL = 0;
@@ -479,48 +630,176 @@
       await writeGatewayRecord({ type: 'stop' });
   }
 
-  async function armHardware() {
-    if (missionMode !== 'hardware' || !isConnected ||
-        !gatewayRadioReady || !gatewaySession || !roverLinkFresh) return;
-    isEstop = false;
-    await sendSessionCommand('heartbeat');
-    await sendSessionCommand('arm');
+  // Manual release is neutral, not disarm. The armed session and watchdogs
+  // stay alive, while the rover receives an explicit zero command.
+  async function releaseManualDrive() {
+    stopDriveRefresh();
+    activeDrivePointerId = null;
+    manualInputSource = null;
+    currentMotorL = 0;
+    currentMotorR = 0;
+    if (missionMode === 'hardware' && transportMode === 'SERIAL' &&
+        gatewayArmed && gatewaySession) {
+      await sendSessionCommand('drive', { left: 0, right: 0,
+        ttl_ms: COMMAND_TTL_MS });
+    }
   }
 
-  async function toggleEstop() {
-    if (!isConnected) return;
-    if (!isEstop) {
-      isEstopPending = true;
-      isEstop = true;
-      if (missionMode === 'hardware') await safetyDisarm();
-      else await stopDriveMotion();
-      setTimeout(() => { isEstopPending = false; }, 150);
-    } else {
-      isEstop = false;
-      if (missionMode === 'hardware') await armHardware();
+  /** @param {'EXPLORE'|'NAVIGATE'|'RETURN_HOME'} mode @param {{x:number,y:number}|null} goal */
+  async function beginMission(mode, goal = null) {
+    if (missionMode !== 'hardware' || !exploreControlReady) return false;
+    const next = startMission(missionController, mode, estimatedMapState,
+      goal, performance.now());
+    missionController = next;
+    if (mode === 'EXPLORE' && next.reason === 'NO_REACHABLE_FRONTIER') {
+      await beginExploreObservation('BUILDING_INITIAL_MAP');
+      return true;
     }
+    if (next.status !== 'RUNNING') {
+      appendRealLog({ source: 'dashboard', severity: 'warning',
+        code: next.reason, message: `Mission rejected: ${next.reason}.` });
+      return false;
+    }
+    controlMode = 'AUTO_EXPLORE';
+    isAutoPaused = false;
+    await sendSessionCommand('drive', { left: 0, right: 0,
+      ttl_ms: COMMAND_TTL_MS });
+    return true;
+  }
+
+  async function beginExploreObservation(reason = 'UPDATING_FRONTIER_MAP') {
+    if (missionMode !== 'hardware' || !exploreControlReady) return false;
+    stopDriveRefresh();
+    currentMotorL = 0;
+    currentMotorR = 0;
+    controlMode = 'AUTO_EXPLORE';
+    isAutoPaused = false;
+    exploreBootstrapScanIds = [];
+    exploreBootstrapStartedAt = performance.now();
+    exploreBootstrapRequestedAt = exploreBootstrapStartedAt;
+    missionController = {
+      ...missionController, mode: 'EXPLORE', status: 'SCANNING', reason,
+      goal: null, path: [], pathIndex: 0, targetKey: null
+    };
+    await sendSessionCommand('drive', { left: 0, right: 0,
+      ttl_ms: COMMAND_TTL_MS });
+    const sent = await runDiagnostic(DIAGNOSTIC_ACTION.START_SCAN, 0);
+    if (!sent) {
+      await haltMission('STATIONARY_SCAN_NOT_SENT');
+      return false;
+    }
+    return true;
+  }
+
+  /** @param {{x:number,y:number}} goal */
+  function setNavigationWaypoint(goal) {
+    if (missionMode === 'demo' || controlMode !== 'AUTO_EXPLORE' ||
+        missionController.mode !== 'NAVIGATE') return;
+    void beginMission('NAVIGATE', goal);
+  }
+
+  /** @param {'MANUAL'|'EXPLORE'|'NAVIGATE'|'RETURN_HOME'} mode */
+  async function selectAutonomyMode(mode) {
+    if (mode === 'MANUAL') {
+      await selectControlMode('MANUAL');
+      return;
+    }
+    if (!exploreControlReady) return;
+    if (missionMode === 'demo') {
+      controlMode = 'AUTO_EXPLORE';
+      isAutoPaused = false;
+      missionController = {
+        ...createMissionControllerState(), mode,
+        status: mode === 'NAVIGATE' ? 'AWAITING_GOAL' : 'RUNNING',
+        reason: mode === 'NAVIGATE' ? 'CLICK_KNOWN_FREE_CELL' : 'SIMULATED_DEMO'
+      };
+      return;
+    }
+    stopDriveRefresh();
+    currentMotorL = 0;
+    currentMotorR = 0;
+    await sendSessionCommand('drive', { left: 0, right: 0,
+      ttl_ms: COMMAND_TTL_MS });
+    controlMode = 'AUTO_EXPLORE';
+    isAutoPaused = false;
+    if (mode === 'NAVIGATE') {
+      missionController = {
+        ...stopMission(missionController, 'CLICK_KNOWN_FREE_CELL'),
+        mode: 'NAVIGATE', status: 'AWAITING_GOAL',
+        reason: 'CLICK_KNOWN_FREE_CELL'
+      };
+      return;
+    }
+    await beginMission(mode);
+  }
+
+  async function haltMission(reason = 'OPERATOR_STOP') {
+    missionController = stopMission(missionController, reason);
+    controlMode = 'MANUAL';
+    isAutoPaused = false;
+    await releaseManualDrive();
+    if (missionMode === 'hardware' && gatewayArmed)
+      await sendSessionCommand('manual');
+  }
+
+  async function armHardware() {
+    if (missionMode !== 'hardware' || !isConnected ||
+        !gatewayRadioReady || !gatewaySession || !roverLinkFresh ||
+        isEstop || isArmPending) return;
+    isArmPending = true;
+    await sendSessionCommand('heartbeat');
+    const sent = await sendSessionCommand('arm');
+    if (!sent) isArmPending = false;
+    setTimeout(() => {
+      if (!gatewayArmed || !roverCommandArmed) isArmPending = false;
+    }, 1800);
+  }
+
+  async function engageRemoteStop() {
+    if (!isConnected || isEstopPending) return;
+    isEstopPending = true;
+    isEstop = true;
+    if (missionMode === 'hardware') await safetyDisarm();
+    else await stopDriveMotion();
+    setTimeout(() => { isEstopPending = false; }, 150);
+  }
+
+  function clearRemoteStop() {
+    // Clearing the UI latch never rearms motion. Arming remains a separate,
+    // deliberate action with rover-side confirmation.
+    isEstop = false;
+    isEstopPending = false;
   }
 
   function updateKeyboardDrive() {
     if (!keyState.w && !keyState.a && !keyState.s && !keyState.d) {
-      void stopDriveMotion();
+      void releaseManualDrive();
       return;
     }
-    const linear = (keyState.w ? speedPercent : 0) -
-                   (keyState.s ? speedPercent : 0);
-    const turn = (keyState.d ? speedPercent : 0) -
-                 (keyState.a ? speedPercent : 0);
-    startHoldDrive(
-      Math.max(-100, Math.min(100, linear + turn)),
-      Math.max(-100, Math.min(100, linear - turn))
+    manualInputSource = 'keyboard';
+    const vector = keyboardDriveVector(
+      keyState, speedPercent, manualForwardAllowed
     );
+    startHoldDrive(vector.left, vector.right);
   }
 
   /** @param {KeyboardEvent} e */
   function handleKeydown(e) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    const movementKey = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp',
+      'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code);
+    if (movementKey && (!hardwareControlReady || controlMode !== 'MANUAL')) {
+      e.preventDefault();
+      return;
+    }
+    if (movementKey && manualInputSource === 'pointer') {
+      e.preventDefault();
+      return;
+    }
     if (e.code === 'KeyW' || e.code === 'ArrowUp') {
-      e.preventDefault(); if (!keyState.w) { keyState.w = true; updateKeyboardDrive(); }
+      e.preventDefault();
+      if (!manualForwardAllowed) return;
+      if (!keyState.w) { keyState.w = true; updateKeyboardDrive(); }
     } else if (e.code === 'KeyS' || e.code === 'ArrowDown') {
       e.preventDefault(); if (!keyState.s) { keyState.s = true; updateKeyboardDrive(); }
     } else if (e.code === 'KeyA' || e.code === 'ArrowLeft') {
@@ -529,7 +808,7 @@
       e.preventDefault(); if (!keyState.d) { keyState.d = true; updateKeyboardDrive(); }
     } else if (e.code === 'Space') {
       e.preventDefault();
-      if (!keyState.space) { keyState.space = true; void toggleEstop(); }
+      if (!keyState.space) { keyState.space = true; void engageRemoteStop(); }
     }
   }
 
@@ -549,13 +828,15 @@
     } else {
       return;
     }
-    void stopDriveMotion();
     if (keyState.w || keyState.a || keyState.s || keyState.d)
       updateKeyboardDrive();
+    else void releaseManualDrive();
   }
 
   function handleWindowBlur() {
     keyState = { w: false, a: false, s: false, d: false, space: false };
+    activeDrivePointerId = null;
+    manualInputSource = null;
     if (missionMode === 'hardware') void safetyDisarm();
     else void stopDriveMotion();
   }
@@ -566,7 +847,20 @@
 
   /** @param {'MANUAL' | 'AUTO_EXPLORE'} mode */
   async function selectControlMode(mode) {
-    await stopDriveMotion();
+    if (mode === 'AUTO_EXPLORE' && missionMode === 'hardware') {
+      // Preserve the already explicit armed session while transitioning from
+      // manual to the TTL-refreshed planner. A raw STOP would disarm it.
+      stopDriveRefresh();
+      currentMotorL = 0;
+      currentMotorR = 0;
+      await sendSessionCommand('drive', { left: 0, right: 0,
+        ttl_ms: COMMAND_TTL_MS });
+      await beginMission('EXPLORE');
+      return;
+    }
+    if (controlMode !== mode) await releaseManualDrive();
+    if (mode === 'MANUAL' && missionMode === 'hardware')
+      missionController = stopMission(missionController);
     controlMode = mode;
     if (mode === 'AUTO_EXPLORE') isAutoPaused = false;
     if (missionMode !== 'hardware' || !gatewayArmed) return;
@@ -575,8 +869,9 @@
 
   async function toggleAutoPause() {
     isAutoPaused = !isAutoPaused;
-    if (missionMode === 'hardware' && gatewayArmed)
-      await sendSessionCommand(isAutoPaused ? 'manual' : 'auto');
+    if (missionMode === 'hardware' && gatewayArmed && isAutoPaused)
+      await sendSessionCommand('drive', { left: 0, right: 0,
+        ttl_ms: COMMAND_TTL_MS });
   }
 
   // --- Modal Config ---
@@ -626,15 +921,15 @@
         };
       case 'ultrasonic':
         return {
-          title: 'HC-SR04 Forward Ultrasonic',
-          sensorIc: 'HC-SR04',
-          pinout: 'TRIG GPIO 19 / ECHO GPIO 18 via divider',
-          sampling: telemetry.source === 'SIMULATED' ? 'Simulated' : 'Bounded front sample',
+          title: 'Fail-closed Fused Front Clearance',
+          sensorIc: 'HC-SR04 + centered VL53L0X',
+          pinout: 'Ultrasonic GPIO 19/18 · top ToF I²C GPIO 21/22',
+          sampling: telemetry.source === 'SIMULATED' ? 'Simulated' : 'Both channels required within 300 ms',
           currentVal: `${telemetry.frontDistanceCm ?? '—'} cm`,
           unit: 'cm',
           history: historyBuffers.ultrasonic,
           status: telemetry.frontDistanceCm === null ? 'unknown' : 'normal',
-          safetyNote: 'A fresh, valid front reading is required for forward motion. Final stop distances must be measured on the actual surface and battery state.',
+          safetyNote: 'The nearer valid reading is used. If either ultrasonic or centered top ToF is invalid or stale, forward motion is blocked.',
           actionThreshold: 'Bench-calibrate slowdown',
           dangerThreshold: 'Bench-calibrate stop'
         };
@@ -648,6 +943,33 @@
     isModalOpen = true;
   }
 
+  function toggleSentinelDemo() {
+    if (missionMode !== 'demo') return;
+    sentinelDemoActive = !sentinelDemoActive;
+    sentinelDemoStartedAt = sentinelDemoActive ? Date.now() : 0;
+  }
+
+  /** @param {number} now */
+  function updateSentinel(now) {
+    if (!hazardEngine || missionMode === null) return;
+    sentinelResult = hazardEngine.observe(telemetry, now, { heartbeatAgeMs });
+    if (sentinelResult.score < 55 ||
+        now - lastHazardZoneAt < 5000 ||
+        !(missionMode === 'demo' || estimatedMapState.pose.known)) return;
+
+    const previous = hazardZones[hazardZones.length - 1];
+    if (previous && Math.hypot(previous.x - roverPose.x,
+        previous.y - roverPose.y) < 12) return;
+    hazardZones = [...hazardZones, {
+      x: roverPose.x,
+      y: roverPose.y,
+      score: sentinelResult.score,
+      state: sentinelResult.state,
+      simulated: missionMode === 'demo'
+    }].slice(-16);
+    lastHazardZoneAt = now;
+  }
+
 
   onMount(() => {
     window.addEventListener('keydown', handleKeydown);
@@ -655,6 +977,21 @@
     window.addEventListener('blur', handleWindowBlur);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', handleWindowBlur);
+
+    let disposed = false;
+    void fetch('/models/hazard-model.json')
+      .then((response) => {
+        if (!response.ok) throw new Error(`Model HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((model) => {
+        if (disposed) return;
+        hazardEngine = createHazardEngine(model);
+        updateSentinel(Date.now());
+      })
+      .catch(() => {
+        if (!disposed) sentinelResult = createUnavailableHazardResult();
+      });
 
     const heartbeatInterval = setInterval(() => {
       if (missionMode === 'hardware' && transportMode === 'SERIAL' && gatewaySession)
@@ -668,28 +1005,104 @@
         telemetry.source = 'STALE';
         telemetry.alertState = 'UNKNOWN';
       }
-    }, 100);
+    }, 250);
+
+    const sentinelInterval = setInterval(() => {
+      if (!document.hidden) updateSentinel(Date.now());
+    }, 1000);
+
+    const missionInterval = setInterval(async () => {
+      if (missionTickBusy || missionMode !== 'hardware' ||
+          controlMode !== 'AUTO_EXPLORE' || isAutoPaused) return;
+      missionTickBusy = true;
+      try {
+        if (missionController.status === 'SCANNING') {
+          const now = performance.now();
+          const scanComplete = telemetry.driveState === 'MANUAL';
+          if (scanComplete && exploreBootstrapScanIds.length >= 2) {
+            const next = startMission(missionController, 'EXPLORE',
+              estimatedMapState, null, now);
+            missionController = next;
+            if (next.status !== 'RUNNING')
+              await haltMission(next.reason);
+          } else if (scanComplete && exploreBootstrapScanIds.length < 2 &&
+              now - exploreBootstrapRequestedAt > 900) {
+            exploreBootstrapRequestedAt = now;
+            await runDiagnostic(DIAGNOSTIC_ACTION.START_SCAN, 0);
+          } else if (now - exploreBootstrapStartedAt > 25000) {
+            await haltMission('STATIONARY_SCAN_TIMEOUT');
+          }
+          return;
+        }
+        if (missionController.status !== 'RUNNING') return;
+        const tick = stepMission(missionController, estimatedMapState, {
+          controlReady: hardwareControlReady,
+          frontValid: telemetry.frontValid === true,
+          frontFresh: telemetry.frontFresh === true,
+          frontBlocked: telemetry.frontBlocked !== false,
+          speedPercent: Math.min(speedPercent, 45)
+        }, performance.now());
+        missionController = tick.state;
+        currentMotorL = tick.drive.left;
+        currentMotorR = tick.drive.right;
+        if (tick.state.status === 'RUNNING') {
+          await sendSessionCommand('drive', { ...tick.drive,
+            ttl_ms: COMMAND_TTL_MS });
+        } else if (missionController.mode === 'EXPLORE' &&
+            (tick.state.status === 'COMPLETE' ||
+             tick.state.reason === 'FRONT_CLEARANCE_BLOCKED' ||
+             tick.state.reason === 'ROUTE_BLOCKED')) {
+          await beginExploreObservation(
+            tick.state.status === 'COMPLETE' ? 'SCANNING_AT_FRONTIER' :
+              'SCANNING_BLOCKED_ROUTE');
+        } else {
+          appendRealLog({ source: 'dashboard', severity:
+            tick.state.status === 'COMPLETE' ? 'info' : 'warning',
+            code: tick.state.reason,
+            message: `Mission stopped: ${tick.state.reason}.` });
+          await haltMission(tick.state.reason);
+        }
+      } finally { missionTickBusy = false; }
+    }, DRIVE_REFRESH_MS);
 
     const simInterval = setInterval(() => {
       if (missionMode === 'demo' && transportMode === 'SIMULATION' && isConnected) {
+        const now = Date.now();
+        const scenarioProgress = sentinelDemoActive
+          ? Math.min(1, Math.max(0, (now - sentinelDemoStartedAt) / 18000))
+          : 0;
         telemetry.source = 'SIMULATED';
         heartbeatAgeMs = 45 + Math.floor(Math.random() * 20);
-        telemetry.temperature = +(28.2 + Math.sin(Date.now() / 4000) * 0.8).toFixed(1);
-        telemetry.humidity = +(69.7 + Math.cos(Date.now() / 5000) * 1.5).toFixed(1);
-        telemetry.gasRaw = Math.max(600, Math.round(862 + Math.sin(Date.now() / 3000) * 40));
+        telemetry.temperature = +(28.2 + Math.sin(now / 4000) * 0.8 +
+          scenarioProgress * 4.8).toFixed(1);
+        telemetry.humidity = +(69.7 + Math.cos(now / 5000) * 1.5 +
+          scenarioProgress * 8).toFixed(1);
+        telemetry.gasRaw = Math.max(600, Math.round(
+          862 + Math.sin(now / 3000) * 40 + scenarioProgress * 980));
         telemetry.gasState = 'SIMULATED';
-        telemetry.waterRaw = Math.round(350 + Math.cos(Date.now() / 7000) * 20);
+        telemetry.waterRaw = Math.round(350 + Math.cos(now / 7000) * 20 +
+          Math.max(0, scenarioProgress - 0.25) * 520);
         telemetry.waterState = 'SIMULATED';
-        telemetry.pitchDeg = +(-3.5 + Math.sin(Date.now() / 2500) * 1.5).toFixed(1);
-        telemetry.rollDeg = +(2.6 + Math.cos(Date.now() / 2800) * 1.2).toFixed(1);
-        telemetry.frontDistanceCm = +(119.0 + Math.sin(Date.now() / 2000) * 15.0).toFixed(0);
+        telemetry.pitchDeg = +(-3.5 + Math.sin(now / 2500) * 1.5 +
+          scenarioProgress * 9).toFixed(1);
+        telemetry.rollDeg = +(2.6 + Math.cos(now / 2800) * 1.2 +
+          scenarioProgress * 6).toFixed(1);
+        telemetry.frontDistanceCm = +(119 + Math.sin(now / 2000) * 15 -
+          scenarioProgress * 68).toFixed(0);
+        telemetry.ultrasonicDistanceCm = telemetry.frontDistanceCm + 4;
+        telemetry.tofMm = (telemetry.frontDistanceCm + 7) * 10;
+        telemetry.frontValid = true;
+        telemetry.frontFresh = true;
+        telemetry.frontBlocked = telemetry.frontDistanceCm < 25;
 
         if (!isEstop) {
           if (controlMode === 'AUTO_EXPLORE' && !isAutoPaused) {
             const t = Date.now() / 1500;
             roverPose.x = +(33.2 + Math.sin(t * 0.4) * 8).toFixed(1);
             roverPose.y = +(-13.6 + Math.cos(t * 0.3) * 6).toFixed(1);
-            roverPose.headingDeg = +(90 + Math.sin(t * 0.5) * 30).toFixed(0);
+            roverPose.headingDeg = +(
+              roverCalibration.scanner.forwardAngleDeg +
+              Math.sin(t * 0.5) * 30).toFixed(0);
             const leftTicks = (telemetry.encoderL ?? 0) + 1;
             const rightTicks = (telemetry.encoderR ?? 0) + 1;
             telemetry.encoderL = leftTicks;
@@ -699,7 +1112,8 @@
             const speed = (currentMotorL + currentMotorR) / 100;
             const turn = (currentMotorR - currentMotorL) / 100;
             roverPose.headingDeg += turn * 3;
-            const rad = (roverPose.headingDeg - 90) * (Math.PI / 180);
+            const rad = (roverPose.headingDeg -
+              roverCalibration.scanner.forwardAngleDeg) * (Math.PI / 180);
             roverPose.x += Math.cos(rad) * speed * 2;
             roverPose.y += Math.sin(rad) * speed * 2;
             const leftTicks = (telemetry.encoderL ?? 0) + 2;
@@ -709,9 +1123,10 @@
           }
         }
       }
-    }, 200);
+    }, 500);
 
     return () => {
+      disposed = true;
       window.removeEventListener('keydown', handleKeydown);
       window.removeEventListener('keyup', handleKeyup);
       window.removeEventListener('blur', handleWindowBlur);
@@ -720,6 +1135,8 @@
       clearInterval(simInterval);
       clearInterval(heartbeatInterval);
       clearInterval(freshnessInterval);
+      clearInterval(sentinelInterval);
+      clearInterval(missionInterval);
       stopDriveRefresh();
       if (missionMode === 'hardware' && transportMode === 'SERIAL')
         void writeGatewayRecord({ type: 'stop' });
@@ -799,7 +1216,7 @@
         </span>
         <span class="text-sm font-medium px-2 py-0.5 rounded-md flex items-center gap-1.5 {missionMode === 'demo' ? 'bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)]' : transportMode === 'SERIAL' ? 'bg-[var(--ui-color-success-container)] text-[var(--ui-color-on-success-container)]' : 'bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]'}">
           <span class="material-symbols-rounded text-[18px]">{missionMode === 'demo' ? 'science' : transportMode === 'SERIAL' ? 'usb' : 'memory'}</span>
-          {missionMode === 'demo' ? 'DEMO · SIMULATED' : transportMode !== 'SERIAL' ? 'REAL · UNKNOWN' : !gatewaySession ? 'REAL · USB / WAITING' : !gatewayRadioReady ? 'REAL · RADIO DISABLED' : gatewayArmed ? 'REAL · ARMED' : 'REAL · DISARMED'}
+          {missionMode === 'demo' ? 'DEMO · SIMULATED' : transportMode !== 'SERIAL' ? 'REAL · UNKNOWN' : !gatewaySession ? 'REAL · USB / WAITING' : !gatewayRadioReady ? 'REAL · RADIO DISABLED' : isArmPending || (gatewayArmed && !roverCommandArmed) ? 'REAL · ARMING' : gatewayArmed ? 'REAL · ARMED' : 'REAL · DISARMED'}
         </span>
       </div>
 
@@ -820,8 +1237,8 @@
 
         {#if missionMode === 'hardware'}
           {#if transportMode === 'SERIAL'}
-            <button type="button" class="ui-button ui-button--tonal !h-10 !px-4 text-sm" onclick={gatewayArmed ? safetyDisarm : armHardware} disabled={!gatewayRadioReady || (!gatewayArmed && !roverLinkFresh)}>
-              {gatewayArmed ? 'Disarm' : 'Arm controls'}
+            <button type="button" class="ui-button ui-button--tonal !h-10 !px-4 text-sm" onclick={gatewayArmed ? safetyDisarm : armHardware} disabled={!gatewayRadioReady || isArmPending || isEstop || (!gatewayArmed && !roverLinkFresh)}>
+              {isArmPending ? 'Arming…' : gatewayArmed ? 'Disarm' : 'Arm controls'}
             </button>
             <button type="button" class="ui-button ui-button--outlined !h-10 !px-4 text-sm" onclick={disconnectWebSerial}>
               Disconnect
@@ -837,7 +1254,7 @@
         <button
           type="button"
           class="ui-button !h-10 !px-6 text-sm font-bold transition-all duration-150 {isEstop ? 'bg-[var(--ui-color-success)] text-[var(--ui-color-on-success)] animate-pulse' : isEstopPending ? 'bg-[var(--ui-color-warning)] text-[var(--ui-color-on-warning)]' : 'ui-button--filled !bg-[var(--md-sys-color-error)] !text-[var(--md-sys-color-on-error)] focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-error)]'} {!isConnected ? 'opacity-50 cursor-not-allowed' : 'active:scale-95'}"
-          onclick={toggleEstop}
+          onclick={isEstop ? clearRemoteStop : engageRemoteStop}
           disabled={!isConnected}
         >
           <span class="material-symbols-rounded text-[20px]">
@@ -846,7 +1263,7 @@
           <span>
             {#if !isConnected}Remote stop unavailable
             {:else if isEstopPending}Stopping...
-            {:else if isEstop}Reset remote stop
+            {:else if isEstop}Clear stop latch
             {:else}Remote stop{/if}
           </span>
           </button>
@@ -862,10 +1279,10 @@
     <!-- CONTENT AREA -->
     <main class="flex-1 overflow-hidden relative">
       {#if activeNavView === 'console'}
-        <div class="absolute inset-0 flex flex-col p-4 md:p-5 gap-4 overflow-hidden min-h-0" in:m3TopLevelFadeThrough={{ duration: 300 }}>
+        <div class="absolute inset-0 flex flex-col p-4 md:p-5 gap-4 overflow-y-auto overflow-x-hidden lg:overflow-hidden min-h-0" in:m3TopLevelFadeThrough={{ duration: 300 }}>
           
           <!-- TELEMETRY RIBBON -->
-          <section class="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] rounded-xl border border-[var(--md-sys-color-outline-variant)] shrink-0 overflow-hidden">
+          <section class="grid grid-cols-2 lg:grid-cols-6 divide-y lg:divide-y-0 lg:divide-x divide-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] rounded-xl border border-[var(--md-sys-color-outline-variant)] shrink-0 overflow-hidden">
             
             <button type="button" class="text-left flex flex-col gap-1 px-5 py-4 cursor-pointer hover:bg-[var(--md-sys-color-surface-container-highest)] transition-colors duration-150 active:bg-[var(--md-sys-color-surface-variant)]" onclick={() => inspectSensor('gas')}>
               <div class="flex items-center gap-1.5 text-sm font-medium text-[var(--md-sys-color-on-surface-variant)]">
@@ -904,52 +1321,73 @@
               <div class="flex items-baseline gap-2">
                 <span class="text-3xl font-bold telemetry text-[var(--md-sys-color-on-surface)]">{telemetry.frontDistanceCm === null ? '—' : telemetry.frontDistanceCm > 300 ? 'Clear' : telemetry.frontDistanceCm < 2 ? '---' : telemetry.frontDistanceCm} <span class="text-base font-normal">{telemetry.frontDistanceCm !== null && telemetry.frontDistanceCm <= 300 && telemetry.frontDistanceCm >= 2 ? 'cm' : ''}</span></span>
               </div>
-              <span class="text-sm text-[var(--md-sys-color-on-surface-variant)]">Stop threshold pending bench calibration</span>
+              <span class="text-sm text-[var(--md-sys-color-on-surface-variant)]">
+                Fused nearest · ultrasonic {telemetry.ultrasonicDistanceCm ?? '—'} cm · top ToF {telemetry.tofMm === null ? '—' : (telemetry.tofMm / 10).toFixed(1)} cm
+              </span>
             </button>
+
+            <div class="text-left flex flex-col gap-1 px-5 py-4" aria-label="Distance from deployment point">
+              <div class="flex items-center gap-1.5 text-sm font-medium text-[var(--md-sys-color-on-surface-variant)]">
+                <span class="material-symbols-rounded text-[20px] text-[var(--md-sys-color-primary)]">route</span> Distance from start
+              </div>
+              <div class="flex items-baseline gap-2">
+                <span class="text-3xl font-bold telemetry text-[var(--md-sys-color-on-surface)]">{distanceFromDeploymentM === null ? '—' : distanceFromDeploymentM.toFixed(1)} <span class="text-base font-normal">{distanceFromDeploymentM === null ? '' : 'm'}</span></span>
+              </div>
+              <span class="text-sm text-[var(--md-sys-color-on-surface-variant)]">{distanceFromDeploymentNote}</span>
+            </div>
+
+            <AiRiskPanel
+              result={sentinelResult}
+              isDemo={missionMode === 'demo'}
+              demoActive={sentinelDemoActive}
+              onToggleDemo={toggleSentinelDemo}
+            />
           </section>
 
           <!-- CONSOLE PANES (Left, Center, Right) -->
-          <div class="flex-1 flex flex-col lg:flex-row gap-6 min-h-[400px]">
+          <div class="flex-none lg:flex-1 flex flex-col lg:flex-row gap-6 min-h-[400px] lg:min-h-0">
             
             <!-- LEFT: DRIVE CONTROLS -->
-            <aside class="w-full lg:w-[260px] flex flex-col gap-6 shrink-0">
-              <div class="flex flex-col gap-3">
+            <aside class="w-full lg:w-[260px] shrink-0 lg:min-h-0 overflow-hidden" data-testid="drive-panel" use:fitHeight={`${controlMode}:${manualControlStatus}`}>
+              <div data-fit-content class="flex flex-col gap-6 origin-top-left">
+              <div data-fit-mode-group class="flex flex-col gap-3">
                 <h3 class="text-lg font-semibold flex items-center gap-2">
                   <span class="material-symbols-rounded text-[22px] text-[var(--md-sys-color-on-surface-variant)]">gamepad</span> Control mode
                 </h3>
-                <div class="flex p-1 bg-[var(--md-sys-color-surface-container)] rounded-xl mt-1 w-full relative z-0">
-                  <button type="button" class="flex-1 py-1.5 flex items-center justify-center gap-1.5 text-sm font-semibold transition-colors rounded-lg relative z-10 {controlMode === 'MANUAL' ? 'text-[var(--md-sys-color-on-primary-container)]' : 'text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)]'}" onclick={() => selectControlMode('MANUAL')}>
-                    {#if controlMode === 'MANUAL'}
-                      <div class="absolute inset-0 bg-[var(--md-sys-color-primary-container)] rounded-lg shadow-sm -z-10" in:receiveShared={{key: 'control-mode'}} out:sendShared={{key: 'control-mode'}}></div>
-                    {/if}
+                <div data-fit-mode-grid class="grid grid-cols-2 gap-1.5 p-1.5 bg-[var(--md-sys-color-surface-container)] rounded-xl mt-1 w-full">
+                  <button type="button" class="min-h-12 px-2 py-2 flex items-center justify-center gap-1.5 text-sm font-semibold transition-colors rounded-lg {controlMode === 'MANUAL' ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] shadow-sm' : 'text-[var(--md-sys-color-on-surface-variant)] hover:bg-[var(--md-sys-color-surface-container-highest)]'}" onclick={() => selectAutonomyMode('MANUAL')}>
                     <span class="material-symbols-rounded text-[18px]">sports_esports</span> Manual
                   </button>
-                  <button type="button" class="flex-1 py-1.5 flex items-center justify-center gap-1.5 text-sm font-semibold transition-colors rounded-lg relative z-10 {controlMode === 'AUTO_EXPLORE' ? 'text-[var(--md-sys-color-on-primary-container)]' : 'text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)]'}" onclick={() => selectControlMode('AUTO_EXPLORE')} disabled={!hardwareControlReady}>
-                    {#if controlMode === 'AUTO_EXPLORE'}
-                      <div class="absolute inset-0 bg-[var(--md-sys-color-primary-container)] rounded-lg shadow-sm -z-10" in:receiveShared={{key: 'control-mode'}} out:sendShared={{key: 'control-mode'}}></div>
-                    {/if}
-                    <span class="material-symbols-rounded text-[18px]">smart_toy</span> Autonomous
+                  <button type="button" class="min-h-12 px-2 py-2 flex items-center justify-center gap-1.5 text-sm font-semibold transition-colors rounded-lg disabled:opacity-40 disabled:cursor-not-allowed {controlMode === 'AUTO_EXPLORE' && missionController.mode === 'EXPLORE' ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] shadow-sm' : 'text-[var(--md-sys-color-on-surface-variant)] hover:bg-[var(--md-sys-color-surface-container-highest)]'}" onclick={() => selectAutonomyMode('EXPLORE')} disabled={!exploreControlReady} aria-label={exploreControlReady ? 'Start frontier exploration' : 'Explore requires an armed fresh link, pose, ultrasonic, and top ToF'}>
+                    <span class="material-symbols-rounded text-[18px]">travel_explore</span> Explore
+                  </button>
+                  <button type="button" class="min-h-12 px-2 py-2 flex items-center justify-center gap-1.5 text-sm font-semibold transition-colors rounded-lg disabled:opacity-40 disabled:cursor-not-allowed {controlMode === 'AUTO_EXPLORE' && missionController.mode === 'NAVIGATE' ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] shadow-sm' : 'text-[var(--md-sys-color-on-surface-variant)] hover:bg-[var(--md-sys-color-surface-container-highest)]'}" onclick={() => selectAutonomyMode('NAVIGATE')} disabled={!exploreControlReady}>
+                    <span class="material-symbols-rounded text-[18px]">near_me</span> Navigate
+                  </button>
+                  <button type="button" class="min-h-12 px-2 py-2 flex items-center justify-center gap-1.5 text-sm font-semibold transition-colors rounded-lg disabled:opacity-40 disabled:cursor-not-allowed {controlMode === 'AUTO_EXPLORE' && missionController.mode === 'RETURN_HOME' ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] shadow-sm' : 'text-[var(--md-sys-color-on-surface-variant)] hover:bg-[var(--md-sys-color-surface-container-highest)]'}" onclick={() => selectAutonomyMode('RETURN_HOME')} disabled={!exploreControlReady}>
+                    <span class="material-symbols-rounded text-[18px]">home</span> Return
                   </button>
                 </div>
               </div>
 
               {#if controlMode === 'MANUAL'}
-                <div class="flex flex-col items-center">
-                  <div class="grid grid-cols-3 gap-2 w-52">
+                <div data-fit-dpad-section class="flex flex-col items-center">
+                  <div data-fit-dpad class="grid grid-cols-3 gap-2 w-52">
                     <div></div>
-                    <button type="button" class="h-14 rounded-lg bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center hover:bg-[var(--md-sys-color-primary-container)] hover:text-[var(--md-sys-color-on-primary-container)] active:bg-[var(--md-sys-color-primary)] active:text-[var(--md-sys-color-on-primary)] active:scale-95 transition-all duration-150 {keyState.w ? '!bg-[var(--md-sys-color-primary)] !text-[var(--md-sys-color-on-primary)] scale-95' : ''}" disabled={!hardwareControlReady} onpointerdown={() => startHoldDrive(speedPercent, speedPercent)} onpointerup={stopDriveMotion} onpointercancel={stopDriveMotion} onpointerleave={stopDriveMotion}><span class="material-symbols-rounded text-[26px]">arrow_upward</span></button>
+                    <button type="button" aria-label="Drive forward" class="touch-none h-14 rounded-lg bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center hover:bg-[var(--md-sys-color-primary-container)] hover:text-[var(--md-sys-color-on-primary-container)] active:bg-[var(--md-sys-color-primary)] active:text-[var(--md-sys-color-on-primary)] active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed {keyState.w ? '!bg-[var(--md-sys-color-primary)] !text-[var(--md-sys-color-on-primary)] scale-95' : ''}" disabled={!manualForwardAllowed} onpointerdown={(event) => beginPointerDrive(event, speedPercent, speedPercent)} onpointerup={endPointerDrive} onpointercancel={endPointerDrive} onlostpointercapture={endPointerDrive}><span class="material-symbols-rounded text-[26px]">arrow_upward</span></button>
                     <div></div>
-                    <button type="button" class="h-14 rounded-lg bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center hover:bg-[var(--md-sys-color-primary-container)] hover:text-[var(--md-sys-color-on-primary-container)] active:bg-[var(--md-sys-color-primary)] active:text-[var(--md-sys-color-on-primary)] active:scale-95 transition-all duration-150 {keyState.a ? '!bg-[var(--md-sys-color-primary)] !text-[var(--md-sys-color-on-primary)] scale-95' : ''}" disabled={!hardwareControlReady} onpointerdown={() => startHoldDrive(-speedPercent, speedPercent)} onpointerup={stopDriveMotion} onpointercancel={stopDriveMotion} onpointerleave={stopDriveMotion}><span class="material-symbols-rounded text-[26px]">arrow_back</span></button>
-                    <button type="button" class="h-14 rounded-lg bg-[var(--md-sys-color-error-container)] text-[var(--md-sys-color-on-error-container)] text-sm font-bold active:scale-95 border border-[var(--md-sys-color-outline-variant)] transition-all opacity-80 hover:opacity-100 {keyState.space ? '!bg-[var(--md-sys-color-error)] !text-[var(--md-sys-color-on-error)] scale-95 !opacity-100' : ''}" onclick={stopDriveMotion}>STOP</button>
-                    <button type="button" class="h-14 rounded-lg bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center hover:bg-[var(--md-sys-color-primary-container)] hover:text-[var(--md-sys-color-on-primary-container)] active:bg-[var(--md-sys-color-primary)] active:text-[var(--md-sys-color-on-primary)] active:scale-95 transition-all duration-150 {keyState.d ? '!bg-[var(--md-sys-color-primary)] !text-[var(--md-sys-color-on-primary)] scale-95' : ''}" disabled={!hardwareControlReady} onpointerdown={() => startHoldDrive(speedPercent, -speedPercent)} onpointerup={stopDriveMotion} onpointercancel={stopDriveMotion} onpointerleave={stopDriveMotion}><span class="material-symbols-rounded text-[26px]">arrow_forward</span></button>
+                    <button type="button" aria-label="Pivot left" class="touch-none h-14 rounded-lg bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center hover:bg-[var(--md-sys-color-primary-container)] hover:text-[var(--md-sys-color-on-primary-container)] active:bg-[var(--md-sys-color-primary)] active:text-[var(--md-sys-color-on-primary)] active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed {keyState.a ? '!bg-[var(--md-sys-color-primary)] !text-[var(--md-sys-color-on-primary)] scale-95' : ''}" disabled={!hardwareControlReady} onpointerdown={(event) => beginPointerDrive(event, -speedPercent, speedPercent)} onpointerup={endPointerDrive} onpointercancel={endPointerDrive} onlostpointercapture={endPointerDrive}><span class="material-symbols-rounded text-[26px]">arrow_back</span></button>
+                    <button type="button" class="h-14 rounded-lg bg-[var(--md-sys-color-error-container)] text-[var(--md-sys-color-on-error-container)] text-sm font-bold active:scale-95 border border-[var(--md-sys-color-outline-variant)] transition-all opacity-80 hover:opacity-100 {keyState.space ? '!bg-[var(--md-sys-color-error)] !text-[var(--md-sys-color-on-error)] scale-95 !opacity-100' : ''}" onclick={engageRemoteStop}>STOP</button>
+                    <button type="button" aria-label="Pivot right" class="touch-none h-14 rounded-lg bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center hover:bg-[var(--md-sys-color-primary-container)] hover:text-[var(--md-sys-color-on-primary-container)] active:bg-[var(--md-sys-color-primary)] active:text-[var(--md-sys-color-on-primary)] active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed {keyState.d ? '!bg-[var(--md-sys-color-primary)] !text-[var(--md-sys-color-on-primary)] scale-95' : ''}" disabled={!hardwareControlReady} onpointerdown={(event) => beginPointerDrive(event, speedPercent, -speedPercent)} onpointerup={endPointerDrive} onpointercancel={endPointerDrive} onlostpointercapture={endPointerDrive}><span class="material-symbols-rounded text-[26px]">arrow_forward</span></button>
                     <div></div>
-                    <button type="button" class="h-14 rounded-lg bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center hover:bg-[var(--md-sys-color-primary-container)] hover:text-[var(--md-sys-color-on-primary-container)] active:bg-[var(--md-sys-color-primary)] active:text-[var(--md-sys-color-on-primary)] active:scale-95 transition-all duration-150 {keyState.s ? '!bg-[var(--md-sys-color-primary)] !text-[var(--md-sys-color-on-primary)] scale-95' : ''}" disabled={!hardwareControlReady} onpointerdown={() => startHoldDrive(-speedPercent, -speedPercent)} onpointerup={stopDriveMotion} onpointercancel={stopDriveMotion} onpointerleave={stopDriveMotion}><span class="material-symbols-rounded text-[26px]">arrow_downward</span></button>
+                    <button type="button" aria-label="Drive reverse" class="touch-none h-14 rounded-lg bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center hover:bg-[var(--md-sys-color-primary-container)] hover:text-[var(--md-sys-color-on-primary-container)] active:bg-[var(--md-sys-color-primary)] active:text-[var(--md-sys-color-on-primary)] active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed {keyState.s ? '!bg-[var(--md-sys-color-primary)] !text-[var(--md-sys-color-on-primary)] scale-95' : ''}" disabled={!hardwareControlReady} onpointerdown={(event) => beginPointerDrive(event, -speedPercent, -speedPercent)} onpointerup={endPointerDrive} onpointercancel={endPointerDrive} onlostpointercapture={endPointerDrive}><span class="material-symbols-rounded text-[26px]">arrow_downward</span></button>
                     <div></div>
                   </div>
-                  <div class="mt-3 text-sm font-medium text-[var(--md-sys-color-on-surface-variant)] flex gap-3 telemetry"><span>W</span><span>A</span><span>S</span><span>D</span><span>Space</span></div>
+                  <div data-fit-status class="mt-3 w-full text-center text-sm leading-snug font-semibold {manualForwardAllowed || !hardwareControlReady ? 'text-[var(--md-sys-color-on-surface-variant)]' : 'text-[var(--ui-color-on-warning-container)]'}">{manualControlStatus}</div>
+                  <div data-fit-shortcuts class="mt-3 text-sm font-medium text-[var(--md-sys-color-on-surface-variant)] flex gap-3 telemetry"><span class={!manualForwardAllowed ? 'opacity-40' : ''}>W</span><span>A</span><span>S</span><span>D</span><span>Space = stop</span></div>
                 </div>
 
-                <div class="flex flex-col gap-3">
+                <div data-fit-speed class="flex flex-col gap-3">
                   <div class="flex justify-between items-end text-sm">
                     <span class="font-semibold flex items-center gap-1.5"><span class="material-symbols-rounded text-[18px]">speed</span> Speed limit</span>
                     <span class="telemetry font-bold text-[var(--md-sys-color-primary)]">{speedPercent}%</span>
@@ -977,33 +1415,47 @@
                   </div>
                 </div>
 
-                <div class="flex flex-col gap-3 pt-5 border-t border-[var(--md-sys-color-outline-variant)] text-sm text-[var(--md-sys-color-on-surface-variant)]">
-                  <div class="flex justify-between items-center"><span class="font-medium">Command</span><span class="telemetry font-bold text-[var(--md-sys-color-on-surface)]">L: {currentMotorL}% &nbsp; R: {currentMotorR}%</span></div>
-                  <div class="flex justify-between items-center"><span class="font-medium">Encoder count</span><span class="telemetry font-bold text-[var(--md-sys-color-on-surface)]">{telemetry.encoderL ?? '—'} L &nbsp; {telemetry.encoderR ?? '—'} R</span></div>
+                <div data-fit-diagnostics class="flex flex-col gap-3 pt-5 border-t border-[var(--md-sys-color-outline-variant)] text-sm text-[var(--md-sys-color-on-surface-variant)]">
+                  <div class="flex justify-between items-center"><span class="font-medium">Requested output</span><span class="telemetry font-bold text-[var(--md-sys-color-on-surface)]">L: {currentMotorL}% &nbsp; R: {currentMotorR}%</span></div>
+                  <div class="flex justify-between items-center"><span class="font-medium">Accepted ticks</span><span class="telemetry font-bold text-[var(--md-sys-color-on-surface)]">{telemetry.encoderL ?? '—'} L &nbsp; {telemetry.encoderR ?? '—'} R</span></div>
+                  <div class="flex justify-between items-center"><span class="font-medium">Raw edges</span><span class="telemetry font-bold text-[var(--md-sys-color-on-surface)]">{telemetry.encoderRawL ?? '—'} L &nbsp; {telemetry.encoderRawR ?? '—'} R</span></div>
+                  <div class="flex justify-between items-center"><span class="font-medium">Rejected D/S</span><span class="telemetry font-bold text-[var(--md-sys-color-on-surface)]">{telemetry.encoderRejectedDebounceL ?? '—'}/{telemetry.encoderRejectedStateL ?? '—'} L &nbsp; {telemetry.encoderRejectedDebounceR ?? '—'}/{telemetry.encoderRejectedStateR ?? '—'} R</span></div>
                 </div>
               {:else}
                 <div class="flex flex-col gap-4">
                   <div class="flex justify-between items-center text-sm">
                     <span class="font-semibold text-[var(--md-sys-color-on-surface)]">Navigation logic</span>
-                    <span class="px-2.5 py-0.5 rounded font-bold text-[13px] {isAutoPaused ? 'bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)]' : 'bg-[var(--ui-color-success-container)] text-[var(--ui-color-on-success-container)]'}">{isAutoPaused ? 'Paused' : 'Active'}</span>
+                    <span class="px-2.5 py-0.5 rounded font-bold text-[13px] {isAutoPaused || missionController.status === 'SCANNING' || missionController.status === 'AWAITING_GOAL' ? 'bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)]' : missionController.status === 'RUNNING' ? 'bg-[var(--ui-color-success-container)] text-[var(--ui-color-on-success-container)]' : 'bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]'}">{isAutoPaused ? 'PAUSED' : missionController.status}</span>
                   </div>
-                  <p class="text-sm text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">Sweep navigation driven by SG90 servo sweeps and VL53L0X distance sensing.</p>
+                  <div class="grid grid-cols-2 gap-2 text-sm">
+                    <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] p-2"><span class="block text-[var(--md-sys-color-on-surface-variant)]">Mission</span><strong>{missionController.mode}</strong></div>
+                    <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] p-2"><span class="block text-[var(--md-sys-color-on-surface-variant)]">Planner</span><strong>{missionController.status}</strong></div>
+                    <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] p-2"><span class="block text-[var(--md-sys-color-on-surface-variant)]">Route</span><strong>{missionController.path.length} cells</strong></div>
+                    <div class="rounded-lg bg-[var(--md-sys-color-surface-container)] p-2"><span class="block text-[var(--md-sys-color-on-surface-variant)]">Goal</span><strong>{missionController.goal ? `${missionController.goal.x}, ${missionController.goal.y}` : '—'}</strong></div>
+                  </div>
+                  <p class="text-sm text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">{missionController.reason}</p>
+                  {#if missionMode === 'hardware'}
+                    <p class="text-sm leading-snug text-[var(--md-sys-color-on-surface-variant)]">
+                      {missionController.mode === 'NAVIGATE' ? 'Click a known-free map cell to set the destination. Unknown and inflated cells are rejected.' : missionController.status === 'SCANNING' ? 'Rover is stopped while the top ToF builds or refreshes local occupancy evidence.' : 'Explore selects a reachable frontier and replans only through known-free cells.'}
+                    </p>
+                  {/if}
                   <div class="flex gap-3 mt-2">
-                    <button type="button" class="ui-button ui-button--tonal flex-1 !h-10" onclick={toggleAutoPause}>
+                    <button type="button" class="ui-button ui-button--tonal flex-1 !h-10" onclick={toggleAutoPause} disabled={missionController.status !== 'RUNNING'}>
                       <span class="material-symbols-rounded text-[20px]">{isAutoPaused ? 'play_arrow' : 'pause'}</span>
                       {isAutoPaused ? 'Resume' : 'Pause'}
                     </button>
-                    <button type="button" class="ui-button ui-button--outlined flex-1 !h-10" onclick={() => selectControlMode('MANUAL')}>
+                    <button type="button" class="ui-button ui-button--outlined flex-1 !h-10" onclick={() => haltMission()}>
                       <span class="material-symbols-rounded text-[20px]">stop</span>
                       Halt
                     </button>
                   </div>
                 </div>
               {/if}
+              </div>
             </aside>
 
             <!-- CENTER: explicitly simulated/estimated route viewport -->
-            <main class="flex-1 min-w-0 h-[450px] lg:h-auto border border-[var(--md-sys-color-outline-variant)] bg-[#0c0e13] relative flex flex-col">
+            <main class="flex-1 min-w-0 h-[450px] lg:h-auto lg:min-h-0 border border-[var(--md-sys-color-outline-variant)] bg-[#0c0e13] relative flex flex-col">
               <EstimatedRouteCanvas
                 mode={controlMode}
                 isRecording={isRecordingMap}
@@ -1015,23 +1467,28 @@
                 dataSource={telemetry.source}
                 hasEstimatedPose={missionMode === 'demo' || estimatedMapState.pose.known}
                 mapEvidence={missionMode === 'demo' ? null : realMapEvidence}
+                {hazardZones}
+                waypointEnabled={missionMode === 'hardware' && exploreControlReady && controlMode === 'AUTO_EXPLORE' && missionController.mode === 'NAVIGATE'}
+                {missionWaypoint}
+                onSetWaypoint={setNavigationWaypoint}
               />
             </main>
 
             <!-- RIGHT: SAFETY & TILT -->
-            <aside class="w-full lg:w-[280px] xl:w-[310px] flex flex-col gap-6 shrink-0">
-              <div class="flex flex-col gap-5">
+            <aside class="w-full lg:w-[280px] xl:w-[310px] shrink-0 lg:min-h-0 overflow-hidden" data-testid="safety-panel" use:fitHeight={`${telemetry.alertState}:${tofStatus}:${telemetry.frontBlocked}`}>
+              <div data-fit-content class="flex flex-col gap-6 origin-top-left">
+              <div data-fit-safety-summary class="flex flex-col gap-5">
                 <h3 class="text-lg font-semibold flex items-center gap-2">
                   <span class="material-symbols-rounded text-[22px] text-[var(--md-sys-color-on-surface-variant)]">health_and_safety</span> Safety state
                 </h3>
                 
-                <div class="flex items-start gap-3 p-3 rounded-lg border {isEstop || telemetry.alertState === 'STOPPED' ? 'bg-[var(--md-sys-color-error-container)] border-[var(--md-sys-color-error)] text-[var(--md-sys-color-on-error-container)]' : telemetry.alertState === 'ADVISORY' ? 'bg-[var(--ui-color-warning-container)] border-[var(--ui-color-warning)] text-[var(--ui-color-on-warning-container)]' : telemetry.alertState === 'UNKNOWN' ? 'bg-[var(--md-sys-color-surface-container-highest)] border-[var(--md-sys-color-outline-variant)] text-[var(--md-sys-color-on-surface-variant)]' : 'bg-[var(--ui-color-success-container)] border-transparent text-[var(--ui-color-on-success-container)]'}">
+                <div class="flex items-start gap-3 p-3 rounded-lg border {isEstop || telemetry.alertState === 'STOPPED' ? 'bg-[var(--md-sys-color-error-container)] border-[var(--md-sys-color-error)] text-[var(--md-sys-color-on-error-container)]' : telemetry.frontBlocked || telemetry.alertState === 'ADVISORY' ? 'bg-[var(--ui-color-warning-container)] border-[var(--ui-color-warning)] text-[var(--ui-color-on-warning-container)]' : telemetry.alertState === 'UNKNOWN' ? 'bg-[var(--md-sys-color-surface-container-highest)] border-[var(--md-sys-color-outline-variant)] text-[var(--md-sys-color-on-surface-variant)]' : 'bg-[var(--ui-color-success-container)] border-transparent text-[var(--ui-color-on-success-container)]'}">
                   <span class="material-symbols-rounded text-[28px]">
-                    {isEstop ? 'front_hand' : telemetry.alertState === 'ADVISORY' || telemetry.alertState === 'STOPPED' ? 'warning' : 'info'}
+                    {isEstop ? 'front_hand' : telemetry.frontBlocked || telemetry.alertState === 'ADVISORY' || telemetry.alertState === 'STOPPED' ? 'warning' : 'info'}
                   </span>
                   <div>
-                    <div class="text-base font-bold">{isEstop ? 'Remote stop requested' : telemetry.alertState === 'ADVISORY' ? 'Prototype advisory' : telemetry.alertState === 'STOPPED' ? 'Stopped' : `${telemetry.source} telemetry`}</div>
-                    <div class="text-[13px] mt-0.5 opacity-90">{transportMode === 'SIMULATION' ? 'No hardware watchdog in demo mode' : gatewayRadioReady ? 'Gateway 450 ms heartbeat watchdog · rover command TTL 300 ms' : 'Hardware link is not ready'}</div>
+                    <div class="text-base font-bold">{isEstop ? 'Remote stop latched' : telemetry.alertState === 'STOPPED' ? 'Rover safety stop' : telemetry.frontBlocked ? 'Forward motion held' : telemetry.alertState === 'ADVISORY' ? 'Sensor advisory' : `${telemetry.source} telemetry`}</div>
+                    <div class="text-sm leading-snug mt-0.5 opacity-90">{transportMode === 'SIMULATION' ? 'No hardware watchdog in demo mode' : isEstop ? 'Clear the latch, then explicitly arm again.' : telemetry.alertState === 'STOPPED' ? 'A safety fault or stuck state requires operator review.' : telemetry.frontBlocked ? 'Front gate is blocked; reverse and in-place pivot remain available.' : gatewayRadioReady ? 'Gateway 450 ms heartbeat watchdog · rover command TTL 300 ms' : 'Hardware link is not ready'}</div>
                   </div>
                 </div>
 
@@ -1041,12 +1498,16 @@
                     <span class="font-bold text-[var(--md-sys-color-on-surface)]">{telemetry.gasState}</span>
                   </div>
                   <div class="flex items-center justify-between">
-                    <span class="text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-[var(--ui-color-success)]"></span> VL53L0X</span> 
+                    <span class="text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full {telemetry.tofMm === null ? 'bg-[var(--ui-color-warning)]' : 'bg-[var(--ui-color-success)]'}"></span> VL53L0X</span>
                     <span class="font-bold text-[var(--md-sys-color-on-surface)]">{tofStatus}</span>
                   </div>
                   <div class="flex items-center justify-between">
-                    <span class="text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-[var(--ui-color-success)]"></span> HC-SR04</span> 
-                    <span class="font-bold text-[var(--md-sys-color-on-surface)]">{telemetry.frontFresh === true ? telemetry.frontBlocked ? 'BLOCKED' : 'FRESH' : 'UNKNOWN'}</span>
+                    <span class="text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full {telemetry.ultrasonicDistanceCm === null ? 'bg-[var(--ui-color-warning)]' : 'bg-[var(--ui-color-success)]'}"></span> HC-SR04</span>
+                    <span class="font-bold text-[var(--md-sys-color-on-surface)]">{telemetry.ultrasonicDistanceCm === null ? 'NO RETURN' : `${telemetry.ultrasonicDistanceCm.toFixed(1)} cm`}</span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span class="text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full {telemetry.frontBlocked ? 'bg-[var(--ui-color-warning)]' : telemetry.frontValid && telemetry.frontFresh ? 'bg-[var(--ui-color-success)]' : 'bg-[var(--md-sys-color-outline)]'}"></span> Fused front gate</span>
+                    <span class="font-bold text-[var(--md-sys-color-on-surface)]">{telemetry.frontValid && telemetry.frontFresh ? telemetry.frontBlocked ? 'FORWARD HELD' : 'CLEAR' : 'FAIL-CLOSED'}</span>
                   </div>
                   <div class="flex items-center justify-between">
                     <span class="text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-[var(--ui-color-success)]"></span> MPU6050</span> 
@@ -1055,12 +1516,12 @@
                 </div>
               </div>
 
-              <div class="flex-1 min-h-0 flex flex-col border-t border-[var(--md-sys-color-outline-variant)] pt-3">
+              <div data-fit-orientation class="flex-1 min-h-0 flex flex-col border-t border-[var(--md-sys-color-outline-variant)] pt-3">
                 <div class="mb-3 flex items-center justify-between gap-3">
                   <h3 class="text-lg font-semibold flex items-center gap-2">
                     <span class="material-symbols-rounded text-[22px] text-[var(--md-sys-color-on-surface-variant)]">explore</span> Orientation
                   </h3>
-                  <button type="button" class="ui-button ui-button--outlined !h-9 px-3 text-xs" disabled={orientationCalibrating || gatewayArmed || (missionMode !== 'demo' && (!isConnected || !gatewayRadioReady))} onclick={calibrateOrientation}>
+                  <button type="button" class="ui-button ui-button--outlined !h-9 px-3 text-sm" disabled={orientationCalibrating || gatewayArmed || (missionMode !== 'demo' && (!isConnected || !gatewayRadioReady))} onclick={calibrateOrientation}>
                     <span class="material-symbols-rounded text-base">{orientationCalibrating ? 'progress_activity' : 'my_location'}</span>
                     {orientationCalibrating ? 'Keep still…' : 'Calibrate'}
                   </button>
@@ -1076,6 +1537,7 @@
                     cautionThreshold={12.0}
                   />
                 </div>
+              </div>
               </div>
             </aside>
           </div>

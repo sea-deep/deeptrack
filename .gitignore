@@ -6,6 +6,8 @@
 *.hex
 .DS_Store
 
+# Local physical-validation captures (preserve locally; do not publish)
+logs/physical-validation/
 # Credentials
 .env
 .env.*
@@ -14,6 +16,7 @@
 # JavaScript dependencies and generated framework output
 node_modules/
 .svelte-kit/
+dashboard/build/
 
 # Per-build ESP-NOW identities and keys
 firmware/shared/DeeptrackRadioConfig.local.h

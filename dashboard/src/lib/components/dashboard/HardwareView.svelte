@@ -1,5 +1,6 @@
 <script>
   // @ts-nocheck
+  import { onDestroy } from 'svelte';
   import { hardwareInventory, wiringAuthority } from '$lib/config/hardware.js';
   import { DIAGNOSTIC_ACTION } from '$lib/state/gatewayProtocol.js';
 
@@ -13,6 +14,7 @@
   let servoAngle = $state(90);
   let motorTestSpeed = $state(35);
   let servoMoveTimer;
+  let activeMotorPointerId = null;
 
   const checks = [
     { label: 'System status', icon: 'health_and_safety', action: DIAGNOSTIC_ACTION.STATUS },
@@ -57,14 +59,36 @@
     await navigator.clipboard.writeText(text);
   }
 
-  function startMotor(direction) {
+  function startMotor(event, direction) {
     if (!gatewayArmed) return;
     const speed = Number(motorTestSpeed);
     const vectors = {
       forward: [speed, speed], reverse: [-speed, -speed],
       left: [-speed, speed], right: [speed, -speed]
     };
-    onMotorStart(...vectors[direction]);
+    beginMotorHold(event, ...vectors[direction]);
+  }
+
+  function beginMotorHold(event, left, right) {
+    if (!gatewayArmed || activeMotorPointerId !== null) return;
+    activeMotorPointerId = event.pointerId;
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+    onMotorStart(left, right);
+  }
+
+  function endMotorHold(event) {
+    if (activeMotorPointerId !== event.pointerId) return;
+    activeMotorPointerId = null;
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId))
+        event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {}
+    onMotorStop();
+  }
+
+  function stopMotorNow() {
+    activeMotorPointerId = null;
+    onMotorStop();
   }
 
   function moveServo(angle) {
@@ -75,6 +99,11 @@
         onRunDiagnostic(DIAGNOSTIC_ACTION.SERVO, Number(servoAngle));
     }, 120);
   }
+
+  onDestroy(() => {
+    clearTimeout(servoMoveTimer);
+    if (activeMotorPointerId !== null) onMotorStop();
+  });
 </script>
 
 <div class="h-full overflow-x-auto overflow-y-hidden bg-[var(--md-sys-color-surface-container-lowest)]">
@@ -114,7 +143,7 @@
 
       <div class="rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)] p-4 space-y-4">
         <div><h3 class="font-bold">Sensor head and indicators</h3><p class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">Disarm before moving the servo or testing outputs.</p></div>
-        <label class="block"><div class="flex justify-between text-sm mb-2"><span>Servo angle — moves while sliding</span><strong class="telemetry">{servoAngle}°</strong></div><input class="w-full accent-[var(--md-sys-color-primary)]" type="range" min="30" max="150" step="5" value={servoAngle} oninput={(event) => moveServo(event.currentTarget.value)} disabled={!isConnected || gatewayArmed} /></label>
+        <label class="block"><div class="flex justify-between text-sm mb-2"><span>Servo angle — moves while sliding</span><strong class="telemetry">{servoAngle}°</strong></div><input aria-label="Scanner servo angle" class="w-full accent-[var(--md-sys-color-primary)]" type="range" min="30" max="150" step="5" value={servoAngle} oninput={(event) => moveServo(event.currentTarget.value)} disabled={!isConnected || gatewayArmed} /></label>
         <div class="grid grid-cols-3 gap-2">
           <button type="button" class="ui-button ui-button--tonal !h-9 text-xs" disabled={!isConnected || gatewayArmed} onclick={() => moveServo(35)}>Left 35°</button>
           <button type="button" class="ui-button ui-button--tonal !h-9 text-xs" disabled={!isConnected || gatewayArmed} onclick={() => moveServo(90)}>Center 90°</button>
@@ -133,19 +162,19 @@
           <div><h3 class="font-bold">Motor response</h3><p class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">Hold a direction to run; releasing always sends stop.</p></div>
           <span class="text-xs font-bold px-2 py-1 rounded {gatewayArmed ? 'bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)]' : 'bg-[var(--md-sys-color-surface-container-highest)] text-[var(--md-sys-color-on-surface-variant)]'}">{gatewayArmed ? 'ARMED' : 'ARM FIRST'}</span>
         </div>
-        <label class="block"><div class="flex justify-between text-sm mb-2"><span>Test speed</span><strong class="telemetry">{motorTestSpeed}%</strong></div><input class="w-full accent-[var(--md-sys-color-primary)]" type="range" min="20" max="60" step="5" bind:value={motorTestSpeed} disabled={!gatewayArmed} /></label>
+        <label class="block"><div class="flex justify-between text-sm mb-2"><span>Test speed</span><strong class="telemetry">{motorTestSpeed}%</strong></div><input aria-label="Motor test speed" class="w-full accent-[var(--md-sys-color-primary)]" type="range" min="20" max="60" step="5" bind:value={motorTestSpeed} disabled={!gatewayArmed} /></label>
         <div class="grid grid-cols-3 gap-2 max-w-64 mx-auto select-none">
-          <span></span><button type="button" class="ui-button ui-button--tonal !h-11" disabled={!gatewayArmed} onpointerdown={() => startMotor('forward')} onpointerup={onMotorStop} onpointerleave={onMotorStop} onpointercancel={onMotorStop}>↑</button><span></span>
-          <button type="button" class="ui-button ui-button--tonal !h-11" disabled={!gatewayArmed} onpointerdown={() => startMotor('left')} onpointerup={onMotorStop} onpointerleave={onMotorStop} onpointercancel={onMotorStop}>←</button>
-          <button type="button" class="ui-button !h-11 bg-[var(--md-sys-color-error-container)] text-[var(--md-sys-color-on-error-container)]" onclick={onMotorStop}>STOP</button>
-          <button type="button" class="ui-button ui-button--tonal !h-11" disabled={!gatewayArmed} onpointerdown={() => startMotor('right')} onpointerup={onMotorStop} onpointerleave={onMotorStop} onpointercancel={onMotorStop}>→</button>
-          <span></span><button type="button" class="ui-button ui-button--tonal !h-11" disabled={!gatewayArmed} onpointerdown={() => startMotor('reverse')} onpointerup={onMotorStop} onpointerleave={onMotorStop} onpointercancel={onMotorStop}>↓</button><span></span>
+          <span></span><button type="button" class="ui-button ui-button--tonal !h-11 touch-none" disabled={!gatewayArmed} onpointerdown={(event) => startMotor(event, 'forward')} onpointerup={endMotorHold} onpointercancel={endMotorHold} onlostpointercapture={endMotorHold}>↑</button><span></span>
+          <button type="button" class="ui-button ui-button--tonal !h-11 touch-none" disabled={!gatewayArmed} onpointerdown={(event) => startMotor(event, 'left')} onpointerup={endMotorHold} onpointercancel={endMotorHold} onlostpointercapture={endMotorHold}>←</button>
+          <button type="button" class="ui-button !h-11 bg-[var(--md-sys-color-error-container)] text-[var(--md-sys-color-on-error-container)]" onclick={stopMotorNow}>STOP</button>
+          <button type="button" class="ui-button ui-button--tonal !h-11 touch-none" disabled={!gatewayArmed} onpointerdown={(event) => startMotor(event, 'right')} onpointerup={endMotorHold} onpointercancel={endMotorHold} onlostpointercapture={endMotorHold}>→</button>
+          <span></span><button type="button" class="ui-button ui-button--tonal !h-11 touch-none" disabled={!gatewayArmed} onpointerdown={(event) => startMotor(event, 'reverse')} onpointerup={endMotorHold} onpointercancel={endMotorHold} onlostpointercapture={endMotorHold}>↓</button><span></span>
         </div>
         <div class="pt-3 border-t border-[var(--md-sys-color-outline-variant)]">
           <div class="text-xs font-bold uppercase tracking-wide text-[var(--md-sys-color-on-surface-variant)] mb-2">Individual wheel banks</div>
           <div class="grid grid-cols-2 gap-3">
-            <div class="grid grid-cols-2 gap-2"><button type="button" class="ui-button ui-button--outlined !h-10 text-xs" disabled={!gatewayArmed} onpointerdown={() => onMotorStart(Number(motorTestSpeed), 0)} onpointerup={onMotorStop} onpointerleave={onMotorStop} onpointercancel={onMotorStop}>Left +</button><button type="button" class="ui-button ui-button--outlined !h-10 text-xs" disabled={!gatewayArmed} onpointerdown={() => onMotorStart(-Number(motorTestSpeed), 0)} onpointerup={onMotorStop} onpointerleave={onMotorStop} onpointercancel={onMotorStop}>Left −</button></div>
-            <div class="grid grid-cols-2 gap-2"><button type="button" class="ui-button ui-button--outlined !h-10 text-xs" disabled={!gatewayArmed} onpointerdown={() => onMotorStart(0, Number(motorTestSpeed))} onpointerup={onMotorStop} onpointerleave={onMotorStop} onpointercancel={onMotorStop}>Right +</button><button type="button" class="ui-button ui-button--outlined !h-10 text-xs" disabled={!gatewayArmed} onpointerdown={() => onMotorStart(0, -Number(motorTestSpeed))} onpointerup={onMotorStop} onpointerleave={onMotorStop} onpointercancel={onMotorStop}>Right −</button></div>
+            <div class="grid grid-cols-2 gap-2"><button type="button" class="ui-button ui-button--outlined !h-10 text-xs touch-none" disabled={!gatewayArmed} onpointerdown={(event) => beginMotorHold(event, Number(motorTestSpeed), 0)} onpointerup={endMotorHold} onpointercancel={endMotorHold} onlostpointercapture={endMotorHold}>Left +</button><button type="button" class="ui-button ui-button--outlined !h-10 text-xs touch-none" disabled={!gatewayArmed} onpointerdown={(event) => beginMotorHold(event, -Number(motorTestSpeed), 0)} onpointerup={endMotorHold} onpointercancel={endMotorHold} onlostpointercapture={endMotorHold}>Left −</button></div>
+            <div class="grid grid-cols-2 gap-2"><button type="button" class="ui-button ui-button--outlined !h-10 text-xs touch-none" disabled={!gatewayArmed} onpointerdown={(event) => beginMotorHold(event, 0, Number(motorTestSpeed))} onpointerup={endMotorHold} onpointercancel={endMotorHold} onlostpointercapture={endMotorHold}>Right +</button><button type="button" class="ui-button ui-button--outlined !h-10 text-xs touch-none" disabled={!gatewayArmed} onpointerdown={(event) => beginMotorHold(event, 0, -Number(motorTestSpeed))} onpointerup={endMotorHold} onpointercancel={endMotorHold} onlostpointercapture={endMotorHold}>Right −</button></div>
           </div>
         </div>
       </div>

@@ -7,6 +7,7 @@ import {
   gatewayEventToLog,
   makeGatewayCommand,
   parseGatewayLine,
+  PROTOCOL_VERSION,
   shouldAcceptGatewayRecord,
   tofDisplayState,
   upsertScanPoint
@@ -14,6 +15,10 @@ import {
 import { createUnknownTelemetry } from '../src/lib/state/telemetry.js';
 
 describe('gateway NDJSON contract', () => {
+  test('requires the matching protocol-v2 wire contract', () => {
+    assert.equal(PROTOCOL_VERSION, 2);
+  });
+
   test('builds monotonic session-scoped commands', () => {
     assert.deepEqual(makeGatewayCommand('drive', 42, 7, {
       left: 55, right: -55, ttl_ms: 300
@@ -53,13 +58,18 @@ describe('gateway NDJSON contract', () => {
       humidity_pct: null, gas_raw: 800, gas_state: 'RAW_ONLY',
       water_raw: 100, water_state: 'RAW_ONLY', pitch_deg: null,
       roll_deg: null, heading_deg: null, left_ticks: 2,
-      right_ticks: 3, front_cm: null, front_valid: false,
+      right_ticks: 3, left_raw_ticks: 5, right_raw_ticks: 7,
+      left_rejected_debounce_ticks: 1, right_rejected_debounce_ticks: 2,
+      left_rejected_state_ticks: 2, right_rejected_state_ticks: 2,
+      front_cm: null, front_valid: false,
       front_fresh: false, front_blocked: true, tof_mm: null,
       servo_deg: 90, drive_state: 'SAFE_STOP', status_flags: 4,
       rssi_dbm: null, packet_gaps: 0, reset_reason: 1
     });
     assert.equal(result.temperature, null);
     assert.equal(result.frontDistanceCm, null);
+    assert.equal(result.encoderRawL, 5);
+    assert.equal(result.encoderRejectedDebounceR, 2);
     assert.equal(result.alertState, 'STOPPED');
     assert.equal(result.source, 'LIVE');
   });
@@ -78,20 +88,33 @@ describe('gateway NDJSON contract', () => {
     const result = upsertScanPoint([], {
       type: 'scan', source: 'LIVE', scan_id: 6, seq: 10,
       angle_deg: 90, distance_mm: 640, valid: true,
-      range_status: 0, confidence_pct: null
+      range_status: 0, confidence_pct: null, timestamp_ms: 1234
     });
     assert.equal(result[0].valid, true);
     assert.equal(result[0].distance_mm, 640);
     assert.equal(result[0].confidence_pct, undefined);
+    assert.equal(result[0].timestamp_ms, 1234);
   });
 
-  test('labels an inactive ToF scanner as standby instead of unknown', () => {
-    assert.equal(tofDisplayState({ source: 'LIVE', driveState: 'MANUAL' }, []), 'STANDBY');
+  test('reports centered ToF health independently of a sweep', () => {
+    assert.equal(tofDisplayState({ source: 'LIVE', driveState: 'MANUAL', tofMm: 418 }, []), 'LIVE');
+    assert.equal(tofDisplayState({ source: 'LIVE', driveState: 'MANUAL', tofMm: null }, []), 'NO RETURN');
     assert.equal(tofDisplayState({ source: 'LIVE', driveState: 'AUTO_SCAN' }, []), 'SCANNING');
     assert.equal(tofDisplayState(
       { source: 'LIVE', driveState: 'AUTO_SCAN' },
       [{ valid: true, distance_mm: 420 }]
     ), 'SCANNING · RETURNS');
+  });
+
+  test('treats an obstacle as a directional hold, not a global stop', () => {
+    const result = applyGatewayTelemetry(createUnknownTelemetry(), {
+      type: 'telemetry', source: 'LIVE', drive_state: 'MANUAL',
+      front_cm: 24, ultrasonic_cm: 26, tof_mm: 240,
+      front_valid: true, front_fresh: true, front_blocked: true,
+      gas_state: 'RAW_ONLY', water_state: 'RAW_ONLY'
+    });
+    assert.equal(result.alertState, 'ADVISORY');
+    assert.equal(result.frontBlocked, true);
   });
 
   test('renders deterministic rover event labels from uptime', () => {

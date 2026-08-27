@@ -15,6 +15,8 @@ constexpr float FRONT_MIN_CM = 2.0f;
 constexpr float FRONT_MAX_CM = 200.0f;
 constexpr uint32_t FRONT_SAMPLE_INTERVAL_MS = 80;
 constexpr uint32_t FRONT_STALE_AFTER_MS = 300;
+constexpr uint32_t CENTER_TOF_SAMPLE_INTERVAL_MS = 125;
+constexpr uint32_t FRONT_FUSION_STALE_MS = 300;
 constexpr uint32_t ULTRASONIC_TIMEOUT_US = 12000;
 
 constexpr int16_t MANUAL_DUTY = 145;
@@ -23,8 +25,24 @@ constexpr int16_t TURN_DUTY = 120;
 constexpr uint32_t MOTOR_RAMP_INTERVAL_MS = 30;
 constexpr uint8_t MOTOR_RAMP_STEP = 12;
 constexpr uint32_t SERIAL_BENCH_BURST_MS = 600;
+constexpr uint32_t VALIDATION_COUNTDOWN_MS = 5000;
+constexpr uint32_t VALIDATION_MAX_LIFTED_RUN_MS = 3000;
+constexpr uint32_t VALIDATION_MAX_GROUND_RUN_MS = 5000;
+constexpr uint32_t VALIDATION_MIN_NOISE_MS = 10000;
+constexpr uint32_t VALIDATION_MAX_NOISE_MS = 60000;
+constexpr uint32_t VALIDATION_LEASE_TIMEOUT_MS = 750;
+constexpr int16_t VALIDATION_MIN_DUTY = 80;
+constexpr int16_t VALIDATION_MAX_DUTY = 170;
 constexpr uint32_t STALL_WINDOW_MS = 650;
 constexpr int16_t STALL_MIN_DUTY = 100;
+
+// LM393 starting values only. GPIO34/35 have no internal pull-ups; the
+// external pull-ups and FALLING-edge electrical behavior still require a
+// wheels-up signal test before these values can be called calibrated.
+constexpr uint32_t ENCODER_MIN_PULSE_US = 1500;
+constexpr int16_t ENCODER_MOTOR_ACTIVE_DUTY = 25;
+constexpr uint32_t ENCODER_COAST_GRACE_MS = 80;
+constexpr bool ENCODER_USE_MOTOR_STATE_GATE = true;
 
 constexpr uint8_t SCAN_ANGLES_DEG[] = {35, 55, 75, 90, 105, 125, 145};
 constexpr uint8_t SCAN_ANGLE_COUNT =
@@ -72,6 +90,12 @@ static_assert(TILT_CLEAR_DEG < TILT_STOP_DEG,
               "Tilt clear threshold must be below stop threshold");
 static_assert(WATER_CLEAR_PERCENT_OF_SPAN < WATER_CONTACT_PERCENT_OF_SPAN,
               "Water contact hysteresis thresholds are reversed");
+static_assert(ENCODER_MOTOR_ACTIVE_DUTY >= 0 &&
+                  ENCODER_MOTOR_ACTIVE_DUTY <= 255,
+              "Encoder motor-state threshold must be a valid PWM duty");
+static_assert(VALIDATION_MAX_DUTY <= 255 &&
+                  VALIDATION_MIN_DUTY <= VALIDATION_MAX_DUTY,
+              "Validation PWM bounds are invalid");
 
 }  // namespace Thresholds
 }  // namespace DeepTrack

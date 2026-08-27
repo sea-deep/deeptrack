@@ -16,7 +16,9 @@ namespace Pin = DeepTrack::Hardware::Rover;
 
 constexpr uint8_t DHT_MODEL = DHT22;  // Change to DHT11 only for a DHT11.
 constexpr uint8_t LEFT_PWM_CHANNEL = 4, RIGHT_PWM_CHANNEL = 5;
-constexpr uint32_t PWM_FREQUENCY = 1000; // 1 kHz for L298N motor driver efficiency
+// Conservative bench value for the actual TB6612FNG drivers. It is not a
+// measured optimum; compare startup/low-speed behavior before changing it.
+constexpr uint32_t PWM_FREQUENCY = 1000;
 constexpr uint8_t PWM_RESOLUTION = 8;
 constexpr int SERVO_CENTER = 90;
 constexpr int SCAN_ANGLES[] = {25, 55, 90, 125, 155};
@@ -170,7 +172,7 @@ constexpr uint32_t KEEP_ALIVE_INTERVAL_MS = 8000;
 constexpr uint32_t KEEP_ALIVE_PULSE_MS    = 50;
 uint32_t lastKeepAliveMs = 0;
 bool keepAliveActive = false;
-bool keepAliveEnabled = true;
+bool keepAliveEnabled = false;
 
 void updatePowerBankKeepAlive(uint32_t now) {
   if (!keepAliveEnabled) return;
@@ -1092,9 +1094,10 @@ void processCommand(String command) {
     Serial.printf("buzzer active-low=%s\n", buzzerActiveLow ? "yes" : "no");
   }
   else if (command == "keepalive on") {
-    keepAliveEnabled = true;
-    preferences.putBool("keepalive", true);
-    Serial.println("Power bank keep-alive pulse ENABLED (50ms chirp every 8s)");
+    keepAliveEnabled = false;
+    preferences.putBool("keepalive", false);
+    Serial.println(
+        "UNSUPPORTED: no physically validated dedicated keep-alive load is installed; no pulse generated");
   }
   else if (command == "keepalive off") {
     keepAliveEnabled = false;
@@ -1126,8 +1129,10 @@ void processCommand(String command) {
   }
   else if (command == "auto on") startAutonomy();
   else if (command == "autorun on") {
-    preferences.putBool("autorun", true);
-    Serial.println("Saved: autonomous mode starts five seconds after every boot.");
+    preferences.putBool("autorun", false);
+    pendingAutorun = false;
+    Serial.println(
+        "REJECTED: boot-time motor autorun is disabled; start motion explicitly after checks");
   }
   else if (command == "autorun off") {
     preferences.putBool("autorun", false);
@@ -1287,7 +1292,8 @@ void setup() {
     rightInverted = preferences.getBool("invright", true);
   }
   lowAngleIsLeft  = preferences.getBool("invservo", false);
-  keepAliveEnabled = preferences.getBool("keepalive", true);
+  keepAliveEnabled = false;
+  preferences.putBool("keepalive", false);
   // Load encoder calibration scale factors (persisted by 'encscale' command)
   leftEncoderScale  = preferences.getFloat("enc_scale_l", 1.0f);
   rightEncoderScale = preferences.getFloat("enc_scale_r", 1.0f);
@@ -1352,13 +1358,9 @@ void setup() {
     return;
   }
 
-  pendingAutorun = preferences.getBool("autorun", false);
-  if (pendingAutorun) {
-    Serial.println("WARNING: saved autorun enabled; type stop within five seconds.");
-    bootMs = millis();
-  } else {
-    Serial.println("Motors are stopped. Test components, then type: auto on");
-  }
+  pendingAutorun = false;
+  preferences.putBool("autorun", false);
+  Serial.println("Motors are stopped. Test components, then type: auto on");
 }
 
 void loop() {

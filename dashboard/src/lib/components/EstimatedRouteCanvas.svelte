@@ -1,6 +1,9 @@
 <script>
   import { onMount } from 'svelte';
   import { getTheme } from '$lib/utils/theme.js';
+  import { roverCalibration } from '$lib/config/roverCalibration.js';
+
+  const pixelsPerMeter = roverCalibration.map.pixelsPerMeter;
 
   /**
    * @typedef {Object} ScanPoint
@@ -20,6 +23,9 @@
     dataSource = 'UNKNOWN',
     hasEstimatedPose = false,
     mapEvidence = null,
+    hazardZones = /** @type {Array<{x:number,y:number,score:number,state:string,simulated?:boolean}>} */ ([]),
+    waypointEnabled = false,
+    missionWaypoint = null,
     onSetWaypoint = (/** @type {{x: number, y: number}} */ _) => {}
   } = $props();
 
@@ -42,9 +48,38 @@
   let showTrajectory = $state(true);
   let showObstacles = $state(true);
   let showTofRays = $state(true);
+  let showInflation = $state(true);
+  let showFrontiers = $state(true);
 
   /** @type {{x: number, y: number} | null} */
   let currentWaypoint = $state(null);
+  let drawFrame = 0;
+
+  function scheduleDraw() {
+    if (typeof requestAnimationFrame === 'undefined') return;
+    cancelAnimationFrame(drawFrame);
+    drawFrame = requestAnimationFrame(drawMap);
+  }
+
+  $effect(() => {
+    if (missionWaypoint && Number.isFinite(missionWaypoint.x_m) &&
+        Number.isFinite(missionWaypoint.y_m)) {
+      currentWaypoint = { x: missionWaypoint.x_m * pixelsPerMeter,
+        y: missionWaypoint.y_m * pixelsPerMeter };
+    } else if (!missionWaypoint && !isDemo) currentWaypoint = null;
+  });
+
+  // Repaint only when visible map inputs change. This replaces the previous
+  // unconditional 10 FPS full-canvas redraw while preserving live motion.
+  $effect(() => {
+    void [mode, isRecording, isConnected, dataSource, hasPoseEvidence,
+      roverPose.x, roverPose.y, roverPose.headingDeg, zoom, panX, panY,
+      showTrajectory, showObstacles, showTofRays, showInflation,
+      showFrontiers, scanPoints.length, obstaclePoints.length,
+      inflatedPoints.length, frontierPoints.length, exploredTrail.length,
+      hazardZones.length, currentWaypoint?.x, currentWaypoint?.y, isDarkMode];
+    scheduleDraw();
+  });
 
   // Seeded demo geometry is isolated from real calibrated dead-reckoning and
   // sparse occupancy evidence.
@@ -59,6 +94,8 @@
     { x: 90, y: 135, intensity: 1 }, { x: 130, y: 140, intensity: 1 }, { x: 170, y: 145, intensity: 1 }
   ];
   let obstaclePoints = $state(/** @type {Array<{x: number, y: number, intensity: number}>} */ ([]));
+  let inflatedPoints = $state(/** @type {Array<{x: number, y: number}>} */ ([]));
+  let frontierPoints = $state(/** @type {Array<{x: number, y: number}>} */ ([]));
 
   /** @type {Array<{x: number, y: number}>} */
   let exploredTrail = $state(/** @type {Array<{x: number, y: number}>} */ ([]));
@@ -67,15 +104,28 @@
     obstaclePoints = isDemo
       ? demoObstaclePoints.map((point) => ({ ...point }))
       : (mapEvidence?.occupied || []).map((/** @type {any} */ cell) => ({
-          x: cell.x * mapEvidence.cellSizeM * 40,
-          y: cell.y * mapEvidence.cellSizeM * 40,
+          x: cell.x * mapEvidence.cellSizeM * pixelsPerMeter,
+          y: cell.y * mapEvidence.cellSizeM * pixelsPerMeter,
           intensity: Math.min(1, Math.max(0, cell.log_odds / 3))
         }));
+    inflatedPoints = isDemo ? [] : (mapEvidence?.inflated || []).map(
+      (/** @type {any} */ cell) => ({
+        x: cell.x * mapEvidence.cellSizeM * pixelsPerMeter,
+        y: cell.y * mapEvidence.cellSizeM * pixelsPerMeter
+      })
+    );
+    frontierPoints = isDemo ? [] : (mapEvidence?.frontiers || []).map(
+      (/** @type {any} */ cell) => ({
+        x: cell.x * mapEvidence.cellSizeM * pixelsPerMeter,
+        y: cell.y * mapEvidence.cellSizeM * pixelsPerMeter
+      })
+    );
     exploredTrail = isDemo
-      ? [{ x: 0, y: 40 }, { x: 0, y: 20 }, { x: 0, y: 0 }]
+      ? [{ x: 0, y: pixelsPerMeter },
+          { x: 0, y: pixelsPerMeter / 2 }, { x: 0, y: 0 }]
       : (mapEvidence?.trajectory || []).map((/** @type {any} */ point) => ({
-          x: point.x_m * 40,
-          y: point.y_m * 40
+          x: point.x_m * pixelsPerMeter,
+          y: point.y_m * pixelsPerMeter
         }));
   });
 
@@ -105,6 +155,8 @@
     const corridorFill = isDarkMode ? 'rgba(0, 97, 164, 0.14)' : 'rgba(14, 165, 233, 0.12)';
     const trailStroke = isDarkMode ? 'rgba(89, 219, 199, 0.7)' : 'rgba(2, 132, 199, 0.8)';
     const obstacleFill = isDarkMode ? '#ffb4ab' : '#dc2626';
+    const inflationFill = isDarkMode ? 'rgba(255, 210, 113, 0.20)' : 'rgba(217, 119, 6, 0.18)';
+    const frontierFill = isDarkMode ? 'rgba(89, 219, 199, 0.75)' : 'rgba(2, 132, 199, 0.75)';
     const waypointColor = isDarkMode ? '#ffd271' : '#d97706';
     const tofRayColor = isDarkMode ? 'rgba(89, 219, 199, 0.35)' : 'rgba(2, 132, 199, 0.4)';
     const tofHitColor = isDarkMode ? '#59dbc7' : '#0284c7';
@@ -116,7 +168,7 @@
     ctx.fillRect(0, 0, w, h);
 
     // 1. Grid (1m equivalent)
-    const gridSize = 40 * zoom;
+    const gridSize = pixelsPerMeter * zoom;
     ctx.strokeStyle = gridStroke;
     ctx.lineWidth = 1;
 
@@ -166,7 +218,16 @@
       }
     }
 
-    // 3. Persistent Obstacle Points
+    // 3. Inflated footprint exclusion and persistent obstacle points.
+    if (showInflation) {
+      ctx.fillStyle = inflationFill;
+      inflatedPoints.forEach((pt) => {
+        const sx = cx + pt.x * zoom;
+        const sy = cy + pt.y * zoom;
+        ctx.fillRect(sx - 1.5 * zoom, sy - 1.5 * zoom,
+          3 * zoom, 3 * zoom);
+      });
+    }
     if (showObstacles) {
       obstaclePoints.forEach(pt => {
         const sx = cx + pt.x * zoom;
@@ -176,6 +237,44 @@
         ctx.fillStyle = obstacleFill;
         ctx.fill();
       });
+    }
+
+    if (showFrontiers) {
+      ctx.fillStyle = frontierFill;
+      frontierPoints.forEach((pt) => {
+        const sx = cx + pt.x * zoom;
+        const sy = cy + pt.y * zoom;
+        ctx.fillRect(sx - 1.5 * zoom, sy - 1.5 * zoom,
+          3 * zoom, 3 * zoom);
+      });
+    }
+
+    // Sentinel zones are advisory map annotations only. They never enter the
+    // occupancy grid or planner cost map.
+    if (hazardZones.length) {
+      ctx.save();
+      hazardZones.forEach((/** @type {{x:number,y:number,score:number,state:string,simulated?:boolean}} */ zone) => {
+        const zx = cx + zone.x * zoom;
+        const zy = cy + zone.y * zoom;
+        const critical = zone.state === 'CRITICAL';
+        const color = critical ? '#dc2626' : '#d97706';
+        const radius = (14 + Math.min(16, zone.score / 6)) * zoom;
+        ctx.beginPath();
+        ctx.arc(zx, zy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = critical
+          ? 'rgba(220,38,38,0.16)' : 'rgba(217,119,6,0.14)';
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.setLineDash(zone.simulated ? [5, 4] : []);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = color;
+        ctx.font = '700 11px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`AI ${zone.score}`, zx, zy + 4);
+      });
+      ctx.restore();
     }
 
     // 4. Target Waypoint
@@ -204,14 +303,18 @@
     // 5. Single-point VL53L0X rays mounted on the SG90 servo.
     const rx = cx + roverPose.x * zoom;
     const ry = cy + roverPose.y * zoom;
-    const rad = (roverPose.headingDeg - 90) * (Math.PI / 180);
+    const rad = (roverPose.headingDeg -
+      roverCalibration.scanner.forwardAngleDeg) * (Math.PI / 180);
 
     // With no calibrated pose, keep the sweep in a clearly labelled local
     // rover frame instead of hiding real scan evidence or inventing a world pose.
     if (showTofRays && (hasPoseEvidence || hasLocalScanEvidence)) {
       scanPoints.forEach((/** @type {ScanPoint} */ p) => {
         if (!p.valid) return;
-        const rayAngle = (roverPose.headingDeg - 90 + (p.angle_deg - 90)) * (Math.PI / 180);
+        const rayAngle = (roverPose.headingDeg -
+          roverCalibration.scanner.forwardAngleDeg +
+          (p.angle_deg - roverCalibration.scanner.forwardAngleDeg) +
+          roverCalibration.scanner.bearingOffsetDeg) * (Math.PI / 180);
         const distPx = (p.distance_mm / 20) * zoom;
         const lx = rx + Math.cos(rayAngle) * distPx;
         const ly = ry + Math.sin(rayAngle) * distPx;
@@ -231,27 +334,40 @@
       });
     }
 
-    // 6. Rover Body Avatar — only when a pose is simulated or observed.
-    if (hasPoseEvidence) {
+    // 6. Top-view rover. With an unknown pose it stays at the local origin,
+    // visibly translucent; this shows the connected rover without inventing
+    // world coordinates.
+    if (hasPoseEvidence || hasLocalScanEvidence || isConnected) {
       ctx.save();
       ctx.translate(rx, ry);
       ctx.rotate(rad + Math.PI / 2);
+      ctx.globalAlpha = hasPoseEvidence ? 1 : 0.55;
 
+      // Four wheels.
+      ctx.fillStyle = isDarkMode ? '#30343b' : '#1f2937';
+      for (const [x, y] of [[-10, -8], [10, -8], [-10, 8], [10, 8]])
+        ctx.fillRect((x - 3) * zoom, (y - 5) * zoom, 6 * zoom, 10 * zoom);
+
+      // Chassis, nose, and centered top ToF turret.
       ctx.fillStyle = roverBodyFill;
       ctx.beginPath();
-      ctx.moveTo(0, -14 * zoom);
-      ctx.lineTo(10 * zoom, 12 * zoom);
-      ctx.lineTo(0, 7 * zoom);
-      ctx.lineTo(-10 * zoom, 12 * zoom);
+      ctx.roundRect(-8 * zoom, -13 * zoom, 16 * zoom, 26 * zoom, 4 * zoom);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-6 * zoom, -13 * zoom);
+      ctx.lineTo(0, -18 * zoom);
+      ctx.lineTo(6 * zoom, -13 * zoom);
       ctx.closePath();
       ctx.fill();
-
-      // Nose heading line
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
+      ctx.fillStyle = tofHitColor;
       ctx.beginPath();
-      ctx.moveTo(0, -5 * zoom);
-      ctx.lineTo(0, -18 * zoom);
+      ctx.arc(0, -7 * zoom, 3.2 * zoom, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5 * zoom;
+      ctx.beginPath();
+      ctx.moveTo(0, -9 * zoom);
+      ctx.lineTo(0, -23 * zoom);
       ctx.stroke();
 
       ctx.restore();
@@ -289,9 +405,8 @@
 
   /** @param {MouseEvent} e */
   function handleCanvasClick(e) {
-    // Waypoint dispatch is demo-only until a waypoint command is added to the
-    // real rover protocol. Never draw a real target that the rover did not accept.
-    if (!canvas || !isDemo || mode !== 'AUTO_EXPLORE' || !hasPoseEvidence) return;
+    if (!canvas || !(isDemo || waypointEnabled) ||
+        mode !== 'AUTO_EXPLORE' || !hasPoseEvidence) return;
     const rect = canvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
@@ -302,7 +417,12 @@
     const mapY = +((clickY - cy) / zoom).toFixed(1);
 
     currentWaypoint = { x: mapX, y: mapY };
-    onSetWaypoint(currentWaypoint);
+    onSetWaypoint(isDemo ? currentWaypoint : {
+      x: Math.floor((mapX / pixelsPerMeter) /
+        (mapEvidence?.cellSizeM || roverCalibration.map.cellSizeM)),
+      y: Math.floor((mapY / pixelsPerMeter) /
+        (mapEvidence?.cellSizeM || roverCalibration.map.cellSizeM))
+    });
     drawMap();
   }
 
@@ -334,45 +454,56 @@
     updateThemeState();
     const handleThemeChange = () => {
       updateThemeState();
-      drawMap();
+      scheduleDraw();
     };
     window.addEventListener('ui:themechange', handleThemeChange);
 
     const observer = new MutationObserver(() => {
       updateThemeState();
-      drawMap();
+      scheduleDraw();
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
 
-    if (canvas && canvas.parentElement) {
-      canvas.width = canvas.parentElement.clientWidth;
-      canvas.height = canvas.parentElement.clientHeight || 460;
-    }
+    const resize = () => {
+      if (!canvas?.parentElement) return;
+      const width = canvas.parentElement.clientWidth;
+      const height = canvas.parentElement.clientHeight || 460;
+      if (canvas.width === width && canvas.height === height) return;
+      canvas.width = width;
+      canvas.height = height;
+      scheduleDraw();
+    };
+    resize();
 
-    const interval = setInterval(() => {
+    const trailInterval = setInterval(() => {
       if (isRecording && isConnected) {
         const lastPt = exploredTrail[exploredTrail.length - 1];
         if (!lastPt || Math.hypot(lastPt.x - roverPose.x, lastPt.y - roverPose.y) > 6) {
-          exploredTrail.push({ x: roverPose.x, y: roverPose.y });
+          exploredTrail = [...exploredTrail,
+            { x: roverPose.x, y: roverPose.y }];
+          scheduleDraw();
         }
       }
-      drawMap();
-    }, 100);
+    }, 250);
 
-    const handleResize = () => {
-      if (canvas && canvas.parentElement) {
-        canvas.width = canvas.parentElement.clientWidth;
-        canvas.height = canvas.parentElement.clientHeight || 460;
-        drawMap();
-      }
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null : new ResizeObserver(resize);
+    if (canvas?.parentElement) resizeObserver?.observe(canvas.parentElement);
+    if (!resizeObserver) window.addEventListener('resize', resize);
+    const handleVisibility = () => {
+      if (!document.hidden) scheduleDraw();
     };
-    window.addEventListener('resize', handleResize);
+    document.addEventListener('visibilitychange', handleVisibility);
+    scheduleDraw();
 
     return () => {
       window.removeEventListener('ui:themechange', handleThemeChange);
       observer.disconnect();
-      clearInterval(interval);
-      window.removeEventListener('resize', handleResize);
+      clearInterval(trailInterval);
+      resizeObserver?.disconnect();
+      if (!resizeObserver) window.removeEventListener('resize', resize);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      cancelAnimationFrame(drawFrame);
     };
   });
 </script>
@@ -422,6 +553,22 @@
     >
       ToF rays
     </button>
+    <button
+      type="button"
+      class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showInflation ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
+      onclick={() => { showInflation = !showInflation; drawMap(); }}
+      title="Toggle inflated no-go cells"
+    >
+      Inflation
+    </button>
+    <button
+      type="button"
+      class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showFrontiers ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
+      onclick={() => { showFrontiers = !showFrontiers; drawMap(); }}
+      title="Toggle exploration boundaries"
+    >
+      Frontiers
+    </button>
   </div>
 
   <!-- Bottom Non-Wrapping Status Footer & Actions Toolbar -->
@@ -432,9 +579,11 @@
       <span class="opacity-40">·</span>
       <span>Scan hits: <strong class="telemetry text-[var(--md-sys-color-on-surface)]">{validLocalScanCount}</strong></span>
       <span class="opacity-40">·</span>
+      <span>Frontiers: <strong class="telemetry text-[var(--md-sys-color-on-surface)]">{frontierPoints.length}</strong></span>
+      <span class="opacity-40">·</span>
       <span>Zoom: <strong class="telemetry text-[var(--ui-brand-cyan)]">{(zoom * 100).toFixed(0)}%</strong></span>
       <span class="opacity-40">·</span>
-      <span class="truncate">Pose: <strong class="telemetry text-[var(--md-sys-color-on-surface)]">{hasPoseEvidence ? `x:${(roverPose.x / 40).toFixed(2)}m y:${(roverPose.y / 40).toFixed(2)}m` : 'UNKNOWN'}</strong></span>
+      <span class="truncate">Pose: <strong class="telemetry text-[var(--md-sys-color-on-surface)]">{hasPoseEvidence ? `x:${(roverPose.x / pixelsPerMeter).toFixed(2)}m y:${(roverPose.y / pixelsPerMeter).toFixed(2)}m` : 'UNKNOWN'}</strong></span>
     </div>
 
     <!-- Grouped Action Buttons -->

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "version": "sentinel-iforest-demo-1.0.0",
+  "trainingDate": "2026-08-27",
+  "trainingScope": "Synthetic and bench-shaped normal-operation baseline; advisory demonstration model, not safety-certified",
+  "baselineSeconds": 60,
+  "scoreCalibration": { "offset": 0.52, "range": 0.30 },
+  "features": {
+    "gasRaw": { "label": "MQ-4 raw signal", "category": "gas", "center": 850, "scale": 140, "direction": "both", "weight": 1.1 },
+    "gasRate": { "label": "MQ-4 rate", "category": "gas", "center": 0, "scale": 30, "direction": "both", "weight": 1.15 },
+    "temperature": { "label": "Temperature", "category": "climate", "center": 29, "scale": 2.5, "direction": "both", "weight": 0.8 },
+    "temperatureRate": { "label": "Temperature rate", "category": "climate", "center": 0, "scale": 0.22, "direction": "high", "weight": 1.0 },
+    "humidity": { "label": "Humidity", "category": "humidity", "center": 69, "scale": 5, "direction": "both", "weight": 0.7 },
+    "humidityRate": { "label": "Humidity rate", "category": "humidity", "center": 0, "scale": 0.55, "direction": "high", "weight": 0.8 },
+    "climateCoupling": { "label": "Coupled climate rise", "category": "climate", "center": 0, "scale": 0.12, "direction": "high", "weight": 1.0 },
+    "tiltMagnitude": { "label": "Chassis tilt", "category": "stability", "center": 3.5, "scale": 4, "direction": "high", "weight": 1.1 },
+    "waterRaw": { "label": "Water-contact raw signal", "category": "water", "center": 350, "scale": 130, "direction": "both", "weight": 0.9 },
+    "waterRate": { "label": "Water-contact rate", "category": "water", "center": 0, "scale": 45, "direction": "both", "weight": 0.8 },
+    "frontClearanceCm": { "label": "Front clearance", "category": "clearance", "center": 120, "scale": 24, "direction": "low", "weight": 1.0 },
+    "encoderMismatch": { "label": "Encoder disagreement", "category": "mobility", "center": 0.02, "scale": 0.09, "direction": "high", "weight": 1.15 },
+    "tiltEncoderCoupling": { "label": "Tilt + encoder coupling", "category": "stability", "center": 0.1, "scale": 0.7, "direction": "high", "weight": 1.1 },
+    "packetGapRate": { "label": "Packet-gap rate", "category": "link", "center": 0, "scale": 0.5, "direction": "high", "weight": 0.9 },
+    "heartbeatAgeMs": { "label": "Telemetry delay", "category": "link", "center": 55, "scale": 160, "direction": "high", "weight": 1.0 },
+    "rssiWeakness": { "label": "Radio weakness", "category": "link", "center": 0, "scale": 10, "direction": "high", "weight": 0.7 }
+  },
+  "isolationForest": {
+    "sampleSize": 64,
+    "trees": [
+      { "feature": "gasRaw", "threshold": 1120, "size": 64, "left": { "feature": "temperatureRate", "threshold": 0.55, "size": 56, "left": { "leaf": true, "size": 49 }, "right": { "leaf": true, "size": 3 } }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "gasRate", "threshold": 75, "size": 64, "left": { "feature": "climateCoupling", "threshold": 0.22, "size": 58, "left": { "leaf": true, "size": 51 }, "right": { "leaf": true, "size": 3 } }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "temperatureRate", "threshold": 0.65, "size": 64, "left": { "feature": "humidityRate", "threshold": 1.2, "size": 57, "left": { "leaf": true, "size": 50 }, "right": { "leaf": true, "size": 2 } }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "tiltMagnitude", "threshold": 12, "size": 64, "left": { "feature": "encoderMismatch", "threshold": 0.28, "size": 55, "left": { "leaf": true, "size": 48 }, "right": { "leaf": true, "size": 2 } }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "tiltEncoderCoupling", "threshold": 2.5, "size": 64, "left": { "leaf": true, "size": 52 }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "waterRaw", "threshold": 720, "size": 64, "left": { "feature": "frontClearanceCm", "threshold": 52, "size": 58, "left": { "leaf": true, "size": 2 }, "right": { "leaf": true, "size": 49 } }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "waterRate", "threshold": 130, "size": 64, "left": { "leaf": true, "size": 53 }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "frontClearanceCm", "threshold": 42, "size": 64, "left": { "leaf": true, "size": 1 }, "right": { "feature": "gasRaw", "threshold": 1080, "size": 55, "left": { "leaf": true, "size": 48 }, "right": { "leaf": true, "size": 2 } } },
+      { "feature": "packetGapRate", "threshold": 2, "size": 64, "left": { "feature": "heartbeatAgeMs", "threshold": 430, "size": 58, "left": { "leaf": true, "size": 51 }, "right": { "leaf": true, "size": 2 } }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "rssiWeakness", "threshold": 22, "size": 64, "left": { "leaf": true, "size": 52 }, "right": { "leaf": true, "size": 1 } },
+      { "feature": "humidity", "threshold": 82, "size": 64, "left": { "feature": "temperature", "threshold": 35, "size": 57, "left": { "leaf": true, "size": 50 }, "right": { "leaf": true, "size": 2 } }, "right": { "leaf": true, "size": 2 } },
+      { "feature": "encoderMismatch", "threshold": 0.38, "size": 64, "left": { "feature": "tiltMagnitude", "threshold": 9, "size": 56, "left": { "leaf": true, "size": 49 }, "right": { "leaf": true, "size": 3 } }, "right": { "leaf": true, "size": 1 } }
+    ]
+  }
+}

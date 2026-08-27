@@ -15,8 +15,15 @@
  * @property {number | null} gyroZ
  * @property {number | null} encoderL
  * @property {number | null} encoderR
+ * @property {number | null} encoderRawL
+ * @property {number | null} encoderRawR
+ * @property {number | null} encoderRejectedDebounceL
+ * @property {number | null} encoderRejectedDebounceR
+ * @property {number | null} encoderRejectedStateL
+ * @property {number | null} encoderRejectedStateR
  * @property {number | null} estimatedDistanceMeters
  * @property {number | null} frontDistanceCm
+ * @property {number | null} ultrasonicDistanceCm
  * @property {boolean | null} frontValid
  * @property {boolean | null} frontFresh
  * @property {boolean | null} frontBlocked
@@ -63,8 +70,15 @@ export function createUnknownTelemetry() {
     gyroZ: null,
     encoderL: null,
     encoderR: null,
+    encoderRawL: null,
+    encoderRawR: null,
+    encoderRejectedDebounceL: null,
+    encoderRejectedDebounceR: null,
+    encoderRejectedStateL: null,
+    encoderRejectedStateR: null,
     estimatedDistanceMeters: null,
     frontDistanceCm: null,
+    ultrasonicDistanceCm: null,
     frontValid: null,
     frontFresh: null,
     frontBlocked: null,

@@ -115,7 +115,7 @@ describe('Rover Console Operational Logic & Test Suite', () => {
         return { label: 'Stopping...', disabled: false, status: 'pending' };
       }
       if (isEstop) {
-        return { label: 'Reset remote stop', disabled: false, status: 'active' };
+        return { label: 'Clear stop latch', disabled: false, status: 'active' };
       }
       return { label: 'Remote stop', disabled: false, status: 'nominal' };
     }
@@ -128,7 +128,7 @@ describe('Rover Console Operational Logic & Test Suite', () => {
 
     test('shows active reset wording when the remote stop is engaged', () => {
       const res = getEstopState(true, false, true);
-      assert.equal(res.label, 'Reset remote stop');
+      assert.equal(res.label, 'Clear stop latch');
       assert.equal(res.status, 'active');
     });
 
@@ -270,6 +270,27 @@ describe('Rover Console Operational Logic & Test Suite', () => {
       assert.equal('lelPercent' in telemetry, false);
       assert.equal('waterDepth' in telemetry, false);
       assert.equal('batteryPercent' in telemetry, false);
+    });
+  });
+
+  describe('10. Calibrated Mission Feature Gate', () => {
+    function exploreControlReady(missionMode, hardwareControlReady,
+                                 calibrationReady, dualFrontReady) {
+      return missionMode === 'demo'
+        ? hardwareControlReady
+        : hardwareControlReady && calibrationReady && dualFrontReady;
+    }
+
+    test('keeps Explore unavailable on real hardware while odometry calibration is pending', () => {
+      assert.equal(exploreControlReady('hardware', true, false, true), false);
+      assert.equal(exploreControlReady('hardware', true, true, false), false);
+      assert.equal(exploreControlReady('hardware', true, true, true), true);
+      assert.equal(exploreControlReady('hardware', false, true, true), false);
+    });
+
+    test('preserves explicitly simulated exploration in demo mode', () => {
+      assert.equal(exploreControlReady('demo', true, false, false), true);
+      assert.equal(exploreControlReady('demo', false, true, true), false);
     });
   });
 });

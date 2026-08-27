@@ -65,6 +65,25 @@ The physical front is the sensor-facing end. Perform the first tests with wheels
 
 ## Chassis geometry and encoders
 
+### Physical encoder checkpoint — 2026-08-27
+
+| Check | Recorded evidence | Result |
+| --- | --- | --- |
+| Stationary raw noise | Three separate ≥10 s runs: raw/accepted/debounce/state counts all 0/0 on left/right | PASS |
+| Manual left-disc isolation | Raw L/R 541/0; accepted 0/0; state-rejected 541/0 with motor-state gate active | PASS |
+| Manual right-disc isolation | Bounded raw L/R 0/95; later cumulative right raw 1444 while motion continued; left remained 0 | PASS |
+| Left-only forward, PWM 90 | Three 2 s runs: raw L/R 140/1, 130/0, 203/0; accepted left 31, 28, 30 | PRELIMINARY |
+| Left debounce rejection | 109/140, 102/130, 173/203 (approximately 78%, 78%, 85%) with `minPulseUs=1500` | DIAGNOSIS REQUIRED |
+| Right-only and reverse motor isolation | Not run | PAUSED |
+| Loaded distance, turns, stopping | Not run | PAUSED |
+
+The single inactive-right transition in the first left-forward run is retained
+as a transient pending later repetition. Do not compensate for it with scale,
+gating, debounce, or gyro correction. The 1500 µs minimum pulse interval is a
+provisional commissioning value, not a validated filter. Current left/right
+ticks per metre and effective track width remain zero/unset, and balance
+correction remains disabled.
+
 | Constant | Procedure | Recorded value | Repeat spread | Result |
 | --- | --- | --- | --- | --- |
 | Wheel diameter under load | Measure each driven wheel, record range | NOT MEASURED | NOT MEASURED | NOT RUN |

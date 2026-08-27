@@ -54,8 +54,8 @@ static_assert(Rover::GAS >= 32 && Rover::GAS <= 39,
               "MQ-4 must remain on an ESP32 ADC1-capable input");
 static_assert(Rover::WATER >= 32 && Rover::WATER <= 39,
               "Water sensor must remain on an ESP32 ADC1-capable input");
-static_assert(Rover::LEFT_ENCODER >= 34 && Rover::RIGHT_ENCODER >= 34,
-              "Encoder inputs are expected on GPIO34-39 with external pull-ups");
+static_assert(Rover::LEFT_ENCODER == 34 && Rover::RIGHT_ENCODER == 35,
+              "Audited LM393 inputs are GPIO34/35 with external pull-ups");
 
 }  // namespace Hardware
 }  // namespace DeepTrack

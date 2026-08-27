@@ -21,6 +21,10 @@ arduino-cli board list
 
 # Open the 115200-baud serial console.
 ./scripts/firmware/monitor.sh /dev/ttyUSB0
+
+# Run one bounded physical-validation test with a 200 ms safety lease.
+./scripts/firmware/run-validation.py /dev/ttyUSB0 \
+  "test noise 10" --log logs/physical-validation/noise.log
 ```
 
 Available targets:
@@ -32,6 +36,12 @@ Available targets:
 - `gateway-diagnostics`: existing LCD/LED diagnostic.
 
 The upload script never guesses a port. It accepts only an explicit `/dev/ttyUSB*` or `/dev/ttyACM*` path, recompiles the selected target, and then uploads that build directory.
+
+`run-validation.py` is the required console for motor validation commands. It
+sends a heartbeat during the warning countdown and test, sends `stop` on
+cancellation when the serial link still exists, and relies on the firmware's
+independent 750 ms lease when it does not. See
+`docs/PHYSICAL_ODOMETRY_VALIDATION.md` for ordering and pass/fail gates.
 
 Both mission images fail closed when `DeeptrackRadioConfig.local.h` is absent,
 contains a different local MAC, or contains zero keys. The provisioning script

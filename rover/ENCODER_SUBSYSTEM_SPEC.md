@@ -1,4 +1,12 @@
 # DEEPTRACK Rover — Dual LM393 Encoder & Odometry Subsystem Specification
+
+> **Historical diagnostic hypothesis, not current hardware authority.** The
+> assembled project uses TB6612FNG drivers, not L298N. Current decisions and
+> remaining validation are recorded in `docs/AUTONOMY_GAP_AUDIT.md`; pins and
+> electrical wiring are authoritative in `docs/WIRING_GUIDE.md` and
+> `firmware/shared/DeeptrackHardware.h`. Unchecked items below must not be read
+> as the current implementation status.
+
 **Document Version:** 2.0
 **Target Audience:** Firmware Engineering (Codex / Production Firmware Implementation)
 **Scope:** Architecture, Interrupt Handling, Signal Conditioning, Dynamic Piecewise Calibration, and Closed-Loop Sensor Fusion for `DeeptrackRover` Production Firmware.

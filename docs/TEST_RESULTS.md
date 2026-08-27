@@ -67,9 +67,43 @@ Date: 2026-08-26
 | Public dashboard flow | In-app browser at local Vite build | PASS | Homepage opens `/dashboard`; chooser offers public `/dashboard/demo` and sign-in for the real gateway; demo contains no Connect USB control; unauthenticated `/dashboard/real` redirects to `/auth`. Browser console errors: 0. |
 | Dashboard regression after route changes | `npm run check && npm run test:console && npm run build` | PASS | 0 Svelte errors/warnings; 29/29 tests pass; production bundle completes. |
 
+## Hybrid autonomy gap pass
+
+Date: 2026-08-27
+
+| Check | Command or method | Result | Evidence / notes |
+|---|---|---|---|
+| All firmware targets compile | `./scripts/firmware/compile.sh all` plus final changed-target compile | PASS WITH LCD WARNING | Rover mission protocol v2: 1,008,255 bytes flash (76%), 49,668 bytes globals (15%). Rover diagnostics: 396,071/26,072. Motor test: 274,416/22,124. Gateway mission: 935,108/47,168. Gateway diagnostics: 295,692/23,516. LCD library still declares AVR-only compatibility; this is not evidence of physical LCD operation. |
+| Host safety tests | `./scripts/firmware/test-host.sh` | PASS | Existing front, signed-direction, and per-side stall assertions plus encoder debounce/coast deadline and wrap behavior pass. |
+| Dashboard deterministic logic | `npm run test:console` | PASS | 42/42 tests pass: manual/connection safety, real-hardware Explore commissioning lock, demo isolation, NDJSON v2, raw/accepted/rejected encoder mapping, scan timestamps, timestamped pose interpolation, bounded gyro fusion, ray casting, A*, goal validation/snap, frontier clustering/scoring, and failed-branch matching. |
+| Dashboard static/a11y/build | `npm run audit:ui && npm run check && npm run build` | PASS WITH BUNDLE ADVISORY | 21 templates, 0 UI/a11y findings; 0 Svelte errors/warnings; production build completes. Vite reports one client chunk above 500 kB and adapter-auto has no deployment target, neither blocks this local dashboard build. |
+| Shell validation | `bash -n scripts/firmware/*.sh` | PASS | No shell syntax errors. |
+| Physical autonomy acceptance | `docs/HARDWARE_ACCEPTANCE_CHECKLIST.md` and `docs/AUTONOMY_GAP_AUDIT.md` | NOT RUN | No encoder accuracy, motor response, waypoint following, backtracking, Return Home, or click-to-goal completion is inferred from software tests. |
+
 ## Physical acceptance matrix
 
 These tests require the actual rover, controlled test conditions, and recorded observations. They remain deliberately unclaimed until executed.
+
+### Physical-odometry milestone preparation — 2026-08-27
+
+| Check | Command or method | Result | Evidence / notes |
+|---|---|---|---|
+| Bounded rover validation firmware | `./scripts/firmware/compile.sh rover-mission` | PASS (SOFTWARE) | Final stationary-test image: 1,014,267 bytes flash (77%), 49,700 bytes globals (15%). Five-second countdown, PWM 80–170, bounded duration, active-brake cleanup, serial stop, sensor/safety abort, and 750 ms console lease are implemented. No motor behavior inferred. |
+| Gateway protocol-v2 probe | `./scripts/firmware/compile.sh gateway-mission` | PASS WITH LCD WARNING (SOFTWARE) | Final image: 935,616 bytes flash (71%), 47,168 bytes globals (14%). A disarmed-only incompatible-header probe is implemented. The existing LCD library architecture warning remains; no radio/LCD behavior inferred. |
+| Physical validation runbook | `docs/PHYSICAL_ODOMETRY_VALIDATION.md` | IN PROGRESS | Exact flash commands, ordered encoder isolation, cross-count decision tree, ground formulas, stopping/link-loss gates, NVS commands, and evidence sheet prepared. Paired flashing and stationary Test A are now recorded below; motor tests remain unrun. |
+| Protocol-v2 paired flash and reboot | USB identity, upload hashes, rover/gateway boot capture | PASS | Gateway USB `5AB5004467` remained `/dev/ttyACM0`, base/STA MAC `88:57:21:8E:C3:68`; rover USB `5AB5005013` remained `/dev/ttyACM1`, base MAC `88:57:21:B6:87:3C`. Rover printed `PROTOCOL=2`, `armed=0`, `drive_state=0`; gateway emitted protocol-2 hello with `armed:false`. |
+| Live gateway↔rover v2 link | Six-second gateway capture | PASS | Live telemetry and accepted STOP ACKs at approximately 8 Hz, RSSI about -63 to -65 dBm, `packet_gaps:0`, drive state `STOPPED`, and all encoder counters zero. |
+| Protocol-v1 incompatibility probe | Disarmed gateway `protocol_probe` version 1 with simultaneous captures | PASS | Gateway emitted `PROTOCOL_PROBE_SENT`; rover printed `PROTOCOL_MISMATCH expected=2 received=1 SAFE_STOP`; following telemetry remained `STOPPED`. |
+| Stationary encoder noise — run 1 | `run-validation.py ... "test noise 10"` | PASS | 10,000 ms; left/right raw 0/0, accepted 0/0, debounce rejected 0/0, state rejected 0/0; PWM 0/0 and inputs 0/0. Evidence: `logs/physical-validation/noise-1.log`. |
+| Stationary encoder noise — run 2 | Same command | PASS | 10,000 ms; left/right raw 0/0, accepted 0/0, debounce rejected 0/0, state rejected 0/0; PWM 0/0 and inputs 0/0. Evidence: `logs/physical-validation/noise-2.log`. |
+| Stationary encoder noise — run 3 | Same command | PASS | 10,003 ms; left/right raw 0/0, accepted 0/0, debounce rejected 0/0, state rejected 0/0; PWM 0/0 and inputs 0/0. Evidence: `logs/physical-validation/noise-3.log`. |
+| Manual left-disc isolation | Motor power disabled; rotate only left disc during bounded observation | PASS | Raw left/right 541/0. Accepted 0/0 and state-rejected 541/0 because motor-state gating was active at zero command. Evidence: `logs/physical-validation/hand-left.log`. |
+| Manual right-disc isolation | Motor power disabled; rotate only right disc during bounded observation | PASS | Bounded result raw left/right 0/95, accepted 0/0, state-rejected 0/95. A later cumulative diagnostic reached right raw/state-rejected 1444 while the disc continued moving; left remained zero. Evidence: `logs/physical-validation/hand-right.log`. |
+| Left-only forward PWM 90 — run 1 | Wheels lifted; `test side left forward 90 2000` with gateway powered off | PASS WITH TRANSIENT | Raw L/R 140/1; accepted 31/0; debounce-rejected 109/0; state-rejected 0/1. The single inactive-right raw edge requires later confirmation and is not hidden or scale-corrected. Evidence: `logs/physical-validation/left-fwd-90-retry.log`. |
+| Left-only forward PWM 90 — run 2 | Same bounded command | PARTIAL PASS | Raw L/R 130/0; accepted 28/0; debounce-rejected 102/0. No inactive-side edge. Evidence: `logs/physical-validation/left-fwd-90-run2.log`. |
+| Left-only forward PWM 90 — run 3 | Same bounded command | PARTIAL PASS | Raw L/R 203/0; accepted 30/0; debounce-rejected 173/0. No inactive-side edge. Evidence: `logs/physical-validation/left-fwd-90-run3.log`. |
+| Encoder/odometry checkpoint | Evidence review | PAUSED | Stationary and manual optical isolation pass. Left-forward response is preliminary, but approximately 78%, 78%, and 85% debounce rejection plus raw-rate variation require signal-quality diagnosis. Left reverse, right forward/reverse, PWM sweep, and all loaded calibration remain unrun. No geometry/scale value was persisted. |
+| Calibrated mission implementation | `npm run test:console && npm run audit:ui && npm run check && npm run build` | PASS (SOFTWARE ONLY) | Explore/frontier selection, click-to-Navigate, Return Home, known-free A* replanning, progress timeout, and dual-front/link fail-closed outputs are implemented. Real motion stays locked until calibration, pose, armed fresh link, and both front channels are valid. 42 named Node tests plus mission-controller assertions pass; 0 accessibility findings and 0 Svelte diagnostics; production build passes with existing bundle/adapter advisories. |
 
 | ID | Acceptance criterion | Status | Recorded evidence |
 |---|---|---|---|
@@ -92,3 +126,5 @@ These tests require the actual rover, controlled test conditions, and recorded o
 | Date | Test ID | Observation | Corrective action | Retest |
 |---|---|---|---|---|
 | 2026-08-26 | P3-01 | Initial encrypted ESP-NOW test was blocked because the rover USB cable did not enumerate. | Reconnected a working data cable, fixed roles by unique USB serial and measured MAC, provisioned both peers, verified live bidirectional traffic, and passed an armed stale-link reset test. Physical RF-range/removal testing remains. | PARTIAL PASS |
+| 2026-08-27 | Stationary noise runner integration | First attempted noise observation was cancelled after 85 ms by the disarmed gateway's periodic STOP refresh; it was not counted as a test result. | Stationary noise mode now acknowledges disarmed background STOP while retaining active brake and the observation; any motor test or armed/radio command still aborts. Recompiled and reflashed rover only. | PASS — three complete ≥10 s runs |
+| 2026-08-27 | Motor validation with live gateway | Initial left-only attempts were cancelled during countdown by the gateway's periodic disarmed STOP refresh; observed time and applied PWM were zero. | Gateway was fully powered off before the three recorded wheels-lifted left-forward runs. Preserve the safety conflict for a future diagnostic-ownership design; do not weaken STOP behavior. | WORKAROUND ONLY; link-loss behavior not inferred |

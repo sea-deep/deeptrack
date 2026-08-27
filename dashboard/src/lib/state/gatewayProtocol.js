@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const HEARTBEAT_INTERVAL_MS = 150;
 export const DRIVE_REFRESH_MS = 100;
 export const COMMAND_TTL_MS = 300;
@@ -58,10 +58,10 @@ export function formatDiagnosticResult(packet) {
       detail = a < 0 ? `no valid return · range status ${b}` : `${a} mm at ${c}° · range status ${b}`;
       break;
     case DIAGNOSTIC_ACTION.ENCODERS:
-      detail = `ticks L ${a} / R ${b} · pin levels L ${c} / R ${d}`;
+      detail = `raw ticks L ${a} / R ${b} · accepted signed ticks L ${c} / R ${d}`;
       break;
     case DIAGNOSTIC_ACTION.START_SCAN:
-      detail = status === 'PASS' ? `scan ${a} started` : 'requires a disarmed rover with servo and ToF ready';
+      detail = status === 'PASS' ? `stationary scan ${a} started` : 'requires a stationary rover with healthy servo and ToF';
       break;
     case DIAGNOSTIC_ACTION.SERVO:
       detail = status === 'PASS'
@@ -180,7 +180,14 @@ export function applyGatewayTelemetry(previous, packet) {
     headingDeg: finiteOrNull(packet.heading_deg),
     encoderL: finiteOrNull(packet.left_ticks),
     encoderR: finiteOrNull(packet.right_ticks),
+    encoderRawL: finiteOrNull(packet.left_raw_ticks),
+    encoderRawR: finiteOrNull(packet.right_raw_ticks),
+    encoderRejectedDebounceL: finiteOrNull(packet.left_rejected_debounce_ticks),
+    encoderRejectedDebounceR: finiteOrNull(packet.right_rejected_debounce_ticks),
+    encoderRejectedStateL: finiteOrNull(packet.left_rejected_state_ticks),
+    encoderRejectedStateR: finiteOrNull(packet.right_rejected_state_ticks),
     frontDistanceCm: finiteOrNull(packet.front_cm),
+    ultrasonicDistanceCm: finiteOrNull(packet.ultrasonic_cm),
     frontValid: packet.front_valid === true,
     frontFresh: packet.front_fresh === true,
     frontBlocked,
@@ -194,7 +201,11 @@ export function applyGatewayTelemetry(previous, packet) {
     chassisWidthMm: finiteOrNull(packet.chassis_width_mm),
     trackWidthMm: finiteOrNull(packet.track_width_mm),
     micrometersPerTick: finiteOrNull(packet.micrometers_per_tick),
-    alertState: stopped || frontBlocked ? 'STOPPED' : advisory ? 'ADVISORY' : 'NOMINAL'
+    // A front obstacle is a directional motion hold: forward is blocked while
+    // reverse and pivot remain available. Reserve STOPPED for actual rover
+    // SAFE_STOP/STUCK states so the console never implies a disarm that did
+    // not happen.
+    alertState: stopped ? 'STOPPED' : frontBlocked || advisory ? 'ADVISORY' : 'NOMINAL'
   };
 }
 
@@ -209,7 +220,8 @@ export function upsertScanPoint(points, packet) {
     seq: Number.isFinite(packet.seq) ? packet.seq : undefined,
     scan_id: Number.isFinite(packet.scan_id) ? packet.scan_id : undefined,
     range_status: Number.isFinite(packet.range_status) ? packet.range_status : undefined,
-    confidence_pct: Number.isFinite(packet.confidence_pct) ? packet.confidence_pct : undefined
+    confidence_pct: Number.isFinite(packet.confidence_pct) ? packet.confidence_pct : undefined,
+    timestamp_ms: Number.isFinite(packet.timestamp_ms) ? packet.timestamp_ms : undefined
   };
   const index = points.findIndex((point) =>
     point.scan_id === next.scan_id &&
@@ -221,10 +233,12 @@ export function upsertScanPoint(points, packet) {
 /** @param {Record<string, any>} telemetry @param {Array<Record<string, any>>} scanPoints */
 export function tofDisplayState(telemetry, scanPoints) {
   if (telemetry.source !== 'LIVE') return 'UNKNOWN';
-  if (telemetry.driveState !== 'AUTO_SCAN') return 'STANDBY';
-  return scanPoints.some((point) => point.valid === true)
-    ? 'SCANNING · RETURNS'
-    : 'SCANNING';
+  if (telemetry.driveState === 'AUTO_SCAN') {
+    return scanPoints.some((point) => point.valid === true)
+      ? 'SCANNING · RETURNS'
+      : 'SCANNING';
+  }
+  return Number.isFinite(telemetry.tofMm) ? 'LIVE' : 'NO RETURN';
 }
 
 /** @param {unknown} value */

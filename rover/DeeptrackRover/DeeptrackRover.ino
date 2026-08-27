@@ -64,6 +64,48 @@ struct Calibration {
 };
 struct ScanSample { uint8_t angle; uint16_t mm; uint8_t status; bool valid; };
 
+// Geometry fields remain zero until measured on the loaded rover. Filtering
+// defaults are commissioning candidates and are separately printable/editable
+// so rejected pulses never disappear behind a single odometry counter.
+struct EncoderConfig {
+  uint16_t version = 1;
+  uint32_t minPulseUs = Threshold::ENCODER_MIN_PULSE_US;
+  int16_t motorActiveThreshold = Threshold::ENCODER_MOTOR_ACTIVE_DUTY;
+  uint32_t coastGraceMs = Threshold::ENCODER_COAST_GRACE_MS;
+  float leftTicksPerMeter = 0.0f;
+  float rightTicksPerMeter = 0.0f;
+  float effectiveTrackWidthM = 0.0f;
+  float encoderKp = 0.0f;
+  float gyroKp = 0.0f;
+  float maxBalanceCorrection = 0.0f;
+  uint32_t balanceWindowMs = 100;
+  float gyroBiasZ = 0.0f;
+  float stopDistanceM = Threshold::FRONT_STOP_CM / 100.0f;
+  float resumeDistanceM = Threshold::FRONT_CLEAR_CM / 100.0f;
+  bool useMotorStateGate = Threshold::ENCODER_USE_MOTOR_STATE_GATE;
+  bool useEncoderBalance = false;
+  bool useGyroBalance = false;
+};
+
+struct EncoderSnapshot {
+  uint32_t leftRaw;
+  uint32_t rightRaw;
+  int32_t leftAccepted;
+  int32_t rightAccepted;
+  uint32_t leftRejectedDebounce;
+  uint32_t rightRejectedDebounce;
+  uint32_t leftRejectedState;
+  uint32_t rightRejectedState;
+  uint32_t leftMinIntervalUs;
+  uint32_t rightMinIntervalUs;
+  uint32_t leftMaxIntervalUs;
+  uint32_t rightMaxIntervalUs;
+  uint64_t leftIntervalSumUs;
+  uint64_t rightIntervalSumUs;
+  uint32_t leftIntervalCount;
+  uint32_t rightIntervalCount;
+};
+
 enum class AutoPhase : uint8_t {
   IDLE,
   ADVANCE,
@@ -76,6 +118,32 @@ enum class AutoPhase : uint8_t {
   STUCK,
 };
 
+enum class ValidationTestType : uint8_t {
+  NONE,
+  NOISE,
+  LEFT_ONLY,
+  RIGHT_ONLY,
+  STRAIGHT,
+  TURN,
+};
+
+enum class ValidationTestPhase : uint8_t {
+  IDLE,
+  COUNTDOWN,
+  RUNNING,
+};
+
+struct ValidationTest {
+  ValidationTestType type = ValidationTestType::NONE;
+  ValidationTestPhase phase = ValidationTestPhase::IDLE;
+  int16_t leftDuty = 0;
+  int16_t rightDuty = 0;
+  uint32_t durationMs = 0;
+  uint32_t phaseStartedAtMs = 0;
+  uint32_t lastLeaseAtMs = 0;
+  uint8_t lastCountdownSecond = UINT8_MAX;
+};
+
 Safety::FrontSafetyGate frontGate(Threshold::FRONT_STOP_CM,
                                   Threshold::FRONT_CLEAR_CM,
                                   Threshold::FRONT_STALE_AFTER_MS);
@@ -85,16 +153,37 @@ DHT dht(Pin::DHT_DATA, DHT22);
 Servo scanServo;
 Preferences preferences;
 portMUX_TYPE radioMux = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
 
+volatile uint32_t leftRawTicks = 0;
+volatile uint32_t rightRawTicks = 0;
 volatile int32_t leftTicks = 0;
 volatile int32_t rightTicks = 0;
+volatile uint32_t leftRejectedDebounceTicks = 0;
+volatile uint32_t rightRejectedDebounceTicks = 0;
+volatile uint32_t leftRejectedStateTicks = 0;
+volatile uint32_t rightRejectedStateTicks = 0;
+volatile uint32_t lastLeftAcceptedUs = 0;
+volatile uint32_t lastRightAcceptedUs = 0;
+volatile uint32_t leftMinIntervalUs = UINT32_MAX;
+volatile uint32_t rightMinIntervalUs = UINT32_MAX;
+volatile uint32_t leftMaxIntervalUs = 0;
+volatile uint32_t rightMaxIntervalUs = 0;
+volatile uint64_t leftIntervalSumUs = 0;
+volatile uint64_t rightIntervalSumUs = 0;
+volatile uint32_t leftIntervalCount = 0;
+volatile uint32_t rightIntervalCount = 0;
 volatile int8_t leftEncoderDirection = 0;
 volatile int8_t rightEncoderDirection = 0;
+volatile uint32_t leftEncoderActiveUntilUs = 0;
+volatile uint32_t rightEncoderActiveUntilUs = 0;
 volatile bool commandPending = false;
 Protocol::CommandPacket pendingCommand{};
 uint32_t pendingCommandReceivedAtMs = 0;
 volatile bool diagnosticPending = false;
 Protocol::DiagnosticCommandPacket pendingDiagnostic{};
+volatile bool protocolMismatchPending = false;
+volatile uint8_t incompatibleProtocolVersion = 0;
 volatile int8_t lastGatewayRssiDbm = Protocol::RSSI_UNAVAILABLE_DBM;
 
 bool motorPwmReady = false;
@@ -124,6 +213,8 @@ uint32_t lastWaterAtMs = 0;
 uint32_t lastImuAtMs = 0;
 uint32_t lastTofValidAtMs = 0;
 uint32_t lastCenterTofAtMs = 0;
+uint32_t lastCenterTofValidAtMs = 0;
+uint32_t lastUltrasonicValidAtMs = 0;
 uint32_t lastDhtAtMs = 0;
 uint32_t lastDhtValidAtMs = 0;
 uint32_t lastTelemetryAtMs = 0;
@@ -138,6 +229,7 @@ uint32_t lastBuzzerToggleAtMs = 0;
 uint32_t gyroCalibrationStartedAtMs = 0;
 uint32_t diagnosticLedsOffAtMs = 0;
 uint32_t diagnosticBuzzerOffAtMs = 0;
+uint32_t lastBalanceAtMs = 0;
 
 int16_t targetLeft = 0;
 int16_t targetRight = 0;
@@ -145,11 +237,15 @@ int16_t appliedLeft = 0;
 int16_t appliedRight = 0;
 int32_t lastStallLeftTicks = 0;
 int32_t lastStallRightTicks = 0;
+int32_t lastBalanceLeftTicks = 0;
+int32_t lastBalanceRightTicks = 0;
 float pitchDeg = NAN;
 float rollDeg = NAN;
 float rawPitchDeg = NAN;
 float rawRollDeg = NAN;
 float headingDeg = 0.0f;
+float currentGyroZDps = 0.0f;
+float balanceCorrection = 0.0f;
 float temperatureC = NAN;
 float humidityPct = NAN;
 uint16_t gasRaw = 0;
@@ -158,6 +254,7 @@ uint16_t waterRaw = 0;
 uint16_t waterPinMv = 0;
 uint16_t latestCenterTofMm = Protocol::UNKNOWN_DISTANCE_MM;
 uint8_t latestCenterTofStatus = UINT8_MAX;
+float latestUltrasonicCm = NAN;
 float gasEma = NAN;
 double gyroCalibrationSum = 0.0;
 double gyroCalibrationSumSquares = 0.0;
@@ -177,13 +274,213 @@ uint32_t autoPhaseAtMs = 0;
 int8_t selectedTurnSign = 0;
 uint32_t selectedTurnDurationMs = 0;
 Calibration calibration;
+EncoderConfig encoderConfig;
+ValidationTest validationTest;
 String serialLine;
 
-void IRAM_ATTR onLeftEncoder() { leftTicks += leftEncoderDirection; }
-void IRAM_ATTR onRightEncoder() { rightTicks += rightEncoderDirection; }
+void IRAM_ATTR onLeftEncoder() {
+  const uint32_t nowUs = micros();
+  portENTER_CRITICAL_ISR(&encoderMux);
+  ++leftRawTicks;
+  if (Safety::encoderPulseTooSoon(nowUs, lastLeftAcceptedUs,
+                                  encoderConfig.minPulseUs)) {
+    ++leftRejectedDebounceTicks;
+  } else if (encoderConfig.useMotorStateGate &&
+             (leftEncoderDirection == 0 ||
+              !Safety::encoderGateWindowOpen(nowUs,
+                                             leftEncoderActiveUntilUs))) {
+    ++leftRejectedStateTicks;
+  } else {
+    if (lastLeftAcceptedUs) {
+      const uint32_t intervalUs = nowUs - lastLeftAcceptedUs;
+      if (intervalUs < leftMinIntervalUs) leftMinIntervalUs = intervalUs;
+      if (intervalUs > leftMaxIntervalUs) leftMaxIntervalUs = intervalUs;
+      leftIntervalSumUs += intervalUs;
+      ++leftIntervalCount;
+    }
+    lastLeftAcceptedUs = nowUs;
+    leftTicks += leftEncoderDirection;
+  }
+  portEXIT_CRITICAL_ISR(&encoderMux);
+}
+
+void IRAM_ATTR onRightEncoder() {
+  const uint32_t nowUs = micros();
+  portENTER_CRITICAL_ISR(&encoderMux);
+  ++rightRawTicks;
+  if (Safety::encoderPulseTooSoon(nowUs, lastRightAcceptedUs,
+                                  encoderConfig.minPulseUs)) {
+    ++rightRejectedDebounceTicks;
+  } else if (encoderConfig.useMotorStateGate &&
+             (rightEncoderDirection == 0 ||
+              !Safety::encoderGateWindowOpen(nowUs,
+                                             rightEncoderActiveUntilUs))) {
+    ++rightRejectedStateTicks;
+  } else {
+    if (lastRightAcceptedUs) {
+      const uint32_t intervalUs = nowUs - lastRightAcceptedUs;
+      if (intervalUs < rightMinIntervalUs) rightMinIntervalUs = intervalUs;
+      if (intervalUs > rightMaxIntervalUs) rightMaxIntervalUs = intervalUs;
+      rightIntervalSumUs += intervalUs;
+      ++rightIntervalCount;
+    }
+    lastRightAcceptedUs = nowUs;
+    rightTicks += rightEncoderDirection;
+  }
+  portEXIT_CRITICAL_ISR(&encoderMux);
+}
 
 bool elapsed(uint32_t now, uint32_t since, uint32_t interval) {
   return now - since >= interval;
+}
+
+EncoderSnapshot encoderSnapshot() {
+  EncoderSnapshot snapshot{};
+  portENTER_CRITICAL(&encoderMux);
+  snapshot.leftRaw = leftRawTicks;
+  snapshot.rightRaw = rightRawTicks;
+  snapshot.leftAccepted = leftTicks;
+  snapshot.rightAccepted = rightTicks;
+  snapshot.leftRejectedDebounce = leftRejectedDebounceTicks;
+  snapshot.rightRejectedDebounce = rightRejectedDebounceTicks;
+  snapshot.leftRejectedState = leftRejectedStateTicks;
+  snapshot.rightRejectedState = rightRejectedStateTicks;
+  snapshot.leftMinIntervalUs = leftMinIntervalUs;
+  snapshot.rightMinIntervalUs = rightMinIntervalUs;
+  snapshot.leftMaxIntervalUs = leftMaxIntervalUs;
+  snapshot.rightMaxIntervalUs = rightMaxIntervalUs;
+  snapshot.leftIntervalSumUs = leftIntervalSumUs;
+  snapshot.rightIntervalSumUs = rightIntervalSumUs;
+  snapshot.leftIntervalCount = leftIntervalCount;
+  snapshot.rightIntervalCount = rightIntervalCount;
+  portEXIT_CRITICAL(&encoderMux);
+  return snapshot;
+}
+
+void resetEncoderCounters() {
+  portENTER_CRITICAL(&encoderMux);
+  leftRawTicks = rightRawTicks = 0;
+  leftTicks = rightTicks = 0;
+  leftRejectedDebounceTicks = rightRejectedDebounceTicks = 0;
+  leftRejectedStateTicks = rightRejectedStateTicks = 0;
+  lastLeftAcceptedUs = lastRightAcceptedUs = 0;
+  leftMinIntervalUs = rightMinIntervalUs = UINT32_MAX;
+  leftMaxIntervalUs = rightMaxIntervalUs = 0;
+  leftIntervalSumUs = rightIntervalSumUs = 0;
+  leftIntervalCount = rightIntervalCount = 0;
+  portEXIT_CRITICAL(&encoderMux);
+  lastStallLeftTicks = lastStallRightTicks = 0;
+  lastLeftEncoderMotionAtMs = lastRightEncoderMotionAtMs = millis();
+}
+
+bool encoderConfigValid(const EncoderConfig& config) {
+  const bool leftScaleValid = config.leftTicksPerMeter == 0.0f ||
+      (isfinite(config.leftTicksPerMeter) &&
+       config.leftTicksPerMeter >= 10.0f &&
+       config.leftTicksPerMeter <= 100000.0f);
+  const bool rightScaleValid = config.rightTicksPerMeter == 0.0f ||
+      (isfinite(config.rightTicksPerMeter) &&
+       config.rightTicksPerMeter >= 10.0f &&
+       config.rightTicksPerMeter <= 100000.0f);
+  return config.version == 1 && config.minPulseUs >= 100 &&
+         config.minPulseUs <= 20000 && config.motorActiveThreshold >= 0 &&
+         config.motorActiveThreshold <= 255 && config.coastGraceMs <= 1000 &&
+         leftScaleValid && rightScaleValid &&
+         isfinite(config.effectiveTrackWidthM) &&
+         config.effectiveTrackWidthM >= 0.0f &&
+         isfinite(config.encoderKp) && config.encoderKp >= 0.0f &&
+         config.encoderKp <= 5000.0f &&
+         isfinite(config.gyroKp) && config.gyroKp >= 0.0f &&
+         config.gyroKp <= 10.0f &&
+         isfinite(config.maxBalanceCorrection) &&
+         config.maxBalanceCorrection >= 0.0f &&
+         config.maxBalanceCorrection <= 40.0f &&
+         config.balanceWindowMs >= 20 && config.balanceWindowMs <= 2000 &&
+         isfinite(config.stopDistanceM) && isfinite(config.resumeDistanceM) &&
+         config.stopDistanceM > 0.0f &&
+         config.resumeDistanceM > config.stopDistanceM;
+}
+
+void saveEncoderConfig() {
+  preferences.putUShort("enc_ver", encoderConfig.version);
+  preferences.putUInt("enc_min_us", encoderConfig.minPulseUs);
+  preferences.putShort("enc_active", encoderConfig.motorActiveThreshold);
+  preferences.putUInt("enc_coast", encoderConfig.coastGraceMs);
+  preferences.putFloat("enc_l_tpm", encoderConfig.leftTicksPerMeter);
+  preferences.putFloat("enc_r_tpm", encoderConfig.rightTicksPerMeter);
+  preferences.putFloat("enc_track", encoderConfig.effectiveTrackWidthM);
+  preferences.putFloat("enc_kp", encoderConfig.encoderKp);
+  preferences.putFloat("gyro_kp", encoderConfig.gyroKp);
+  preferences.putFloat("bal_max", encoderConfig.maxBalanceCorrection);
+  preferences.putUInt("bal_win", encoderConfig.balanceWindowMs);
+  preferences.putFloat("enc_stop_m", encoderConfig.stopDistanceM);
+  preferences.putFloat("enc_resume_m", encoderConfig.resumeDistanceM);
+  preferences.putFloat("gyro_bias", encoderConfig.gyroBiasZ);
+  preferences.putBool("enc_gate", encoderConfig.useMotorStateGate);
+  preferences.putBool("enc_bal", encoderConfig.useEncoderBalance);
+  preferences.putBool("gyro_bal", encoderConfig.useGyroBalance);
+}
+
+void loadEncoderConfig() {
+  EncoderConfig loaded{};
+  loaded.version = preferences.getUShort("enc_ver", 1);
+  loaded.minPulseUs = preferences.getUInt(
+      "enc_min_us", Threshold::ENCODER_MIN_PULSE_US);
+  loaded.motorActiveThreshold = preferences.getShort(
+      "enc_active", Threshold::ENCODER_MOTOR_ACTIVE_DUTY);
+  loaded.coastGraceMs = preferences.getUInt(
+      "enc_coast", Threshold::ENCODER_COAST_GRACE_MS);
+  loaded.leftTicksPerMeter = preferences.getFloat("enc_l_tpm", 0.0f);
+  loaded.rightTicksPerMeter = preferences.getFloat("enc_r_tpm", 0.0f);
+  loaded.effectiveTrackWidthM = preferences.getFloat("enc_track", 0.0f);
+  loaded.encoderKp = preferences.getFloat("enc_kp", 0.0f);
+  loaded.gyroKp = preferences.getFloat("gyro_kp", 0.0f);
+  loaded.maxBalanceCorrection = preferences.getFloat("bal_max", 0.0f);
+  loaded.balanceWindowMs = preferences.getUInt("bal_win", 100);
+  loaded.gyroBiasZ = preferences.getFloat(
+      "gyro_bias", calibration.gyro_z_bias_dps);
+  loaded.stopDistanceM = preferences.getFloat(
+      "enc_stop_m", Threshold::FRONT_STOP_CM / 100.0f);
+  loaded.resumeDistanceM = preferences.getFloat(
+      "enc_resume_m", Threshold::FRONT_CLEAR_CM / 100.0f);
+  loaded.useMotorStateGate = preferences.getBool(
+      "enc_gate", Threshold::ENCODER_USE_MOTOR_STATE_GATE);
+  loaded.useEncoderBalance = preferences.getBool("enc_bal", false);
+  loaded.useGyroBalance = preferences.getBool("gyro_bal", false);
+
+  // Migrate the existing common distance-per-tick measurement without
+  // claiming independent left/right calibration.
+  if (!loaded.leftTicksPerMeter && !loaded.rightTicksPerMeter &&
+      calibration.micrometers_per_tick) {
+    const float ticksPerMeter =
+        1000000.0f / calibration.micrometers_per_tick;
+    loaded.leftTicksPerMeter = loaded.rightTicksPerMeter = ticksPerMeter;
+  }
+  if (!loaded.effectiveTrackWidthM && calibration.track_width_mm)
+    loaded.effectiveTrackWidthM = calibration.track_width_mm / 1000.0f;
+
+  if (!encoderConfigValid(loaded)) {
+    Serial.println(
+        "ENCODER_CONFIG_INVALID: safe commissioning defaults restored; geometry remains unknown");
+    loaded = EncoderConfig{};
+  }
+  encoderConfig = loaded;
+  frontGate.setThresholds(encoderConfig.stopDistanceM * 100.0f,
+                          encoderConfig.resumeDistanceM * 100.0f);
+}
+
+void updateEncoderAttribution(int16_t duty, volatile int8_t& direction,
+                              volatile uint32_t& activeUntilUs) {
+  const uint32_t nowUs = micros();
+  portENTER_CRITICAL(&encoderMux);
+  if (Safety::dutyRequiresEncoderMotion(
+          duty, encoderConfig.motorActiveThreshold)) {
+    direction = Safety::encoderDirectionForDuty(duty);
+    activeUntilUs = nowUs + encoderConfig.coastGraceMs * 1000UL;
+  } else if (!Safety::encoderGateWindowOpen(nowUs, activeUntilUs)) {
+    direction = 0;
+  }
+  portEXIT_CRITICAL(&encoderMux);
 }
 
 bool nonzeroBytes(const uint8_t* data, size_t length) {
@@ -247,8 +544,14 @@ void onRadioReceive(const esp_now_recv_info_t* info, const uint8_t* data,
       length < static_cast<int>(sizeof(Protocol::PacketHeader))) return;
   Protocol::PacketHeader header{};
   memcpy(&header, data, sizeof(header));
-  if (header.magic != Protocol::PACKET_MAGIC ||
-      header.version != Protocol::PROTOCOL_VERSION) return;
+  if (header.magic != Protocol::PACKET_MAGIC) return;
+  if (header.version != Protocol::PROTOCOL_VERSION) {
+    portENTER_CRITICAL(&radioMux);
+    incompatibleProtocolVersion = header.version;
+    protocolMismatchPending = true;
+    portEXIT_CRITICAL(&radioMux);
+    return;
+  }
   if (info->rx_ctrl)
     lastGatewayRssiDbm = static_cast<int8_t>(info->rx_ctrl->rssi);
   if (header.type == static_cast<uint8_t>(Protocol::MessageType::COMMAND) &&
@@ -353,7 +656,11 @@ void activeBrake(bool report = false) {
   const bool wasBrakeLatched = brakeLatched;
   targetLeft = targetRight = 0;
   appliedLeft = appliedRight = 0;
+  balanceCorrection = 0.0f;
+  portENTER_CRITICAL(&encoderMux);
   leftEncoderDirection = rightEncoderDirection = 0;
+  leftEncoderActiveUntilUs = rightEncoderActiveUntilUs = 0;
+  portEXIT_CRITICAL(&encoderMux);
   benchMotionUntilMs = 0;
   digitalWrite(Pin::LEFT_IN1, HIGH);
   digitalWrite(Pin::LEFT_IN2, HIGH);
@@ -374,6 +681,39 @@ void activeBrake(bool report = false) {
     sendEvent(Protocol::EventCode::ACTIVE_BRAKE, 1);
 }
 
+void serviceBalanceCorrection() {
+  const uint32_t now = millis();
+  const bool straight = targetLeft != 0 && targetRight != 0 &&
+      ((targetLeft > 0) == (targetRight > 0)) &&
+      abs(targetLeft - targetRight) <= 8;
+  const bool calibrated = encoderConfig.leftTicksPerMeter > 0.0f &&
+      encoderConfig.rightTicksPerMeter > 0.0f &&
+      encoderConfig.effectiveTrackWidthM > 0.0f;
+  if (!straight || !calibrated ||
+      (!encoderConfig.useEncoderBalance && !encoderConfig.useGyroBalance)) {
+    balanceCorrection = 0.0f;
+    const EncoderSnapshot snapshot = encoderSnapshot();
+    lastBalanceLeftTicks = snapshot.leftAccepted;
+    lastBalanceRightTicks = snapshot.rightAccepted;
+    lastBalanceAtMs = now;
+    return;
+  }
+  if (!elapsed(now, lastBalanceAtMs, encoderConfig.balanceWindowMs)) return;
+  const EncoderSnapshot snapshot = encoderSnapshot();
+  const float leftM = fabsf(snapshot.leftAccepted - lastBalanceLeftTicks) /
+      encoderConfig.leftTicksPerMeter;
+  const float rightM = fabsf(snapshot.rightAccepted - lastBalanceRightTicks) /
+      encoderConfig.rightTicksPerMeter;
+  balanceCorrection = Safety::boundedBalanceTrim(
+      leftM, rightM, -currentGyroZDps, encoderConfig.useEncoderBalance,
+      encoderConfig.useGyroBalance && calibration.gyro_bias_known,
+      encoderConfig.encoderKp, encoderConfig.gyroKp,
+      encoderConfig.maxBalanceCorrection);
+  lastBalanceLeftTicks = snapshot.leftAccepted;
+  lastBalanceRightTicks = snapshot.rightAccepted;
+  lastBalanceAtMs = now;
+}
+
 int16_t approach(int16_t current, int16_t target, int16_t step) {
   if (current < target) return min<int16_t>(current + step, target);
   if (current > target) return max<int16_t>(current - step, target);
@@ -385,10 +725,19 @@ void serviceMotorRamp() {
   const uint32_t now = millis();
   if (!elapsed(now, lastRampAtMs, Threshold::MOTOR_RAMP_INTERVAL_MS)) return;
   lastRampAtMs = now;
-  appliedLeft = approach(appliedLeft, targetLeft, Threshold::MOTOR_RAMP_STEP);
-  appliedRight = approach(appliedRight, targetRight, Threshold::MOTOR_RAMP_STEP);
-  leftEncoderDirection = Safety::encoderDirectionForDuty(appliedLeft);
-  rightEncoderDirection = Safety::encoderDirectionForDuty(appliedRight);
+  serviceBalanceCorrection();
+  const int16_t direction = targetLeft > 0 && targetRight > 0 ? 1 :
+      targetLeft < 0 && targetRight < 0 ? -1 : 0;
+  const int16_t balancedLeft = constrain(
+      targetLeft - direction * balanceCorrection, -255.0f, 255.0f);
+  const int16_t balancedRight = constrain(
+      targetRight + direction * balanceCorrection, -255.0f, 255.0f);
+  appliedLeft = approach(appliedLeft, balancedLeft, Threshold::MOTOR_RAMP_STEP);
+  appliedRight = approach(appliedRight, balancedRight, Threshold::MOTOR_RAMP_STEP);
+  updateEncoderAttribution(appliedLeft, leftEncoderDirection,
+                           leftEncoderActiveUntilUs);
+  updateEncoderAttribution(appliedRight, rightEncoderDirection,
+                           rightEncoderActiveUntilUs);
   setSideDrive(Pin::LEFT_PWM, Pin::LEFT_IN1, Pin::LEFT_IN2,
                LEFT_PWM_CHANNEL_V2, appliedLeft, leftInverted);
   setSideDrive(Pin::RIGHT_PWM, Pin::RIGHT_IN1, Pin::RIGHT_IN2,
@@ -460,10 +809,12 @@ TofSample readCenteredTof() {
   latestCenterTofMm = sample.valid ? sample.mm : Protocol::UNKNOWN_DISTANCE_MM;
   latestCenterTofStatus = sample.status;
   lastCenterTofAtMs = millis();
+  if (sample.valid && sample.status == 0) lastCenterTofValidAtMs = lastCenterTofAtMs;
   return sample;
 }
 
 void beginAutoScan(bool observationOnly = false);
+void cancelValidationTest(const char* reason);
 
 void updateIndicators() {
   const bool frontBlocked = frontGate.snapshot(millis()).forward_blocked;
@@ -483,7 +834,46 @@ void sampleFront(bool force = false) {
   lastFrontAtMs = now;
   const bool wasBlocked = frontGate.snapshot(now).forward_blocked;
   const UltrasonicSample sample = readFrontUltrasonic();
-  frontGate.observe(sample.valid, sample.cm, millis());
+  if (sample.valid) {
+    latestUltrasonicCm = sample.cm;
+    lastUltrasonicValidAtMs = now;
+  }
+  const uint8_t center = calibration.servo_center_deg
+                             ? calibration.servo_center_deg
+                             : Threshold::SERVO_CENTER_DEG;
+  const bool scannerCentered =
+      abs(static_cast<int>(currentServoDeg) - center) <= 2;
+  if (scannerCentered && tofReady &&
+      (force || !lastCenterTofAtMs ||
+       elapsed(now, lastCenterTofAtMs,
+               Threshold::CENTER_TOF_SAMPLE_INTERVAL_MS))) {
+    const TofSample tofSample = readCurrentTof();
+    latestCenterTofMm = tofSample.valid
+                            ? tofSample.mm : Protocol::UNKNOWN_DISTANCE_MM;
+    latestCenterTofStatus = tofSample.status;
+    lastCenterTofAtMs = millis();
+    if (tofSample.valid && tofSample.status == 0)
+      lastCenterTofValidAtMs = lastCenterTofAtMs;
+  }
+  const uint32_t fusedAt = millis();
+  const bool ultrasonicFresh = lastUltrasonicValidAtMs &&
+      !elapsed(fusedAt, lastUltrasonicValidAtMs,
+               Threshold::FRONT_FUSION_STALE_MS);
+  const bool centeredTofFresh = scannerCentered && lastCenterTofValidAtMs &&
+      !elapsed(fusedAt, lastCenterTofValidAtMs,
+               Threshold::FRONT_FUSION_STALE_MS) &&
+      latestCenterTofStatus == 0 &&
+      latestCenterTofMm != Protocol::UNKNOWN_DISTANCE_MM;
+  const bool centeredTofUsableFresh = scannerCentered && lastCenterTofAtMs &&
+      !elapsed(fusedAt, lastCenterTofAtMs,
+               Threshold::FRONT_FUSION_STALE_MS) &&
+      latestCenterTofStatus != 4 &&
+      latestCenterTofMm != Protocol::UNKNOWN_DISTANCE_MM;
+  const auto fused = Safety::fuseFailClosedFrontRanges(
+      ultrasonicFresh, latestUltrasonicCm, centeredTofUsableFresh,
+      latestCenterTofMm, centeredTofFresh,
+      encoderConfig.stopDistanceM * 100.0f);
+  frontGate.observe(fused.valid, fused.distance_cm, fusedAt);
   const bool blocked = frontGate.snapshot(millis()).forward_blocked;
   const bool forwardWasRequested =
       Safety::FrontSafetyGate::requestsForward(targetLeft, targetRight);
@@ -493,7 +883,9 @@ void sampleFront(bool force = false) {
   const bool autoForwardWasRequested =
       armed && autoPhase != AutoPhase::IDLE && forwardWasRequested;
   if (blocked && forwardWasRequested) {
-    activeBrake(true);
+    // Front obstacles are an armed motion hold, not a session fault. Keep the
+    // operator authorized so reverse and pivot-away commands remain available.
+    activeBrake(false);
     if (autoForwardWasRequested) {
       beginAutoScan(false);
     } else if (manualForwardWasRequested && tofReady && servoReady &&
@@ -506,9 +898,10 @@ void sampleFront(bool force = false) {
     }
   }
   if (!wasBlocked && blocked)
-    sendEvent(sample.valid ? Protocol::EventCode::FRONT_BLOCKED
+    sendEvent(fused.valid ? Protocol::EventCode::FRONT_BLOCKED
                            : Protocol::EventCode::FRONT_STALE,
-              1, sample.valid ? static_cast<int32_t>(sample.cm * 10.0f) : -1);
+              1, fused.valid
+                     ? static_cast<int32_t>(fused.distance_cm * 10.0f) : -1);
   updateIndicators();
 }
 
@@ -527,7 +920,9 @@ bool requestMotion(int16_t left, int16_t right,
       Safety::FrontSafetyGate::requestsForward(left, right);
   if (Safety::FrontSafetyGate::requestsForward(left, right)) sampleFront(true);
   if (!frontGate.allows(left, right, millis())) {
-    activeBrake(true);
+    // Never allow a forward command through the gate, but do not turn a normal
+    // obstacle encounter into SAFE_STOP/disarm.
+    activeBrake(false);
     const uint32_t now = millis();
     if (manualForwardRequest && tofReady && servoReady &&
         (!lastScanCompletedAtMs ||
@@ -677,6 +1072,7 @@ void serviceImu() {
   pitchDeg = rawPitchDeg - calibration.pitch_offset_cdeg / 100.0f;
   rollDeg = rawRollDeg - calibration.roll_offset_cdeg / 100.0f;
   const float gyroZDps = gyro.gyro.z * 180.0f / PI;
+  currentGyroZDps = gyroZDps - calibration.gyro_z_bias_dps;
 
   if (gyroCalibrationActive) {
     gyroCalibrationSum += gyroZDps;
@@ -697,6 +1093,7 @@ void serviceImu() {
           standardDeviation <= Threshold::GYRO_BIAS_MAX_STDDEV_DPS) {
         calibration.gyro_z_bias_dps = static_cast<float>(mean);
         calibration.gyro_bias_known = true;
+        encoderConfig.gyroBiasZ = calibration.gyro_z_bias_dps;
         preferences.putFloat("gyro_bias", calibration.gyro_z_bias_dps);
         preferences.putBool("gyro_known", true);
         headingDeg = 0.0f;
@@ -750,23 +1147,24 @@ void serviceDht() {
 
 void serviceStallDetection() {
   const uint32_t now = millis();
+  const EncoderSnapshot encoders = encoderSnapshot();
   // Encoder-based stall inference is unsafe until both motor direction and
   // distance-per-tick have been measured. Before that point encoder noise or
   // a disconnected channel must remain an odometry warning, never a stop.
   if (!calibration.motor_direction_known ||
       !calibration.micrometers_per_tick) {
-    lastStallLeftTicks = leftTicks;
-    lastStallRightTicks = rightTicks;
+    lastStallLeftTicks = encoders.leftAccepted;
+    lastStallRightTicks = encoders.rightAccepted;
     lastLeftEncoderMotionAtMs = now;
     lastRightEncoderMotionAtMs = now;
     stallSuspected = false;
     return;
   }
-  const int32_t currentLeftTicks = leftTicks;
-  const int32_t currentRightTicks = rightTicks;
+  const int32_t currentLeftTicks = encoders.leftAccepted;
+  const int32_t currentRightTicks = encoders.rightAccepted;
   if (!Safety::dutyRequiresEncoderMotion(appliedLeft,
                                          Threshold::STALL_MIN_DUTY)) {
-    lastStallLeftTicks = leftTicks;
+    lastStallLeftTicks = currentLeftTicks;
     lastLeftEncoderMotionAtMs = now;
   } else if (currentLeftTicks != lastStallLeftTicks) {
     lastStallLeftTicks = currentLeftTicks;
@@ -826,7 +1224,14 @@ void sendScan(const ScanSample& sample) {
   Protocol::ScanPacket packet{};
   fillHeader(packet.header, Protocol::MessageType::SCAN);
   packet.scan_id = scanId;
-  packet.angle_cdeg = sample.angle * 100;
+  const int center = calibration.servo_center_deg
+                         ? calibration.servo_center_deg
+                         : Threshold::SERVO_CENTER_DEG;
+  int relativeBearingDeg = static_cast<int>(sample.angle) - center;
+  if (calibration.servo_low_is_left) relativeBearingDeg = -relativeBearingDeg;
+  // Radio/dashboard convention is canonical: 90 degrees is rover-forward,
+  // values above 90 are counter-clockwise/left, independent of servo mounting.
+  packet.angle_cdeg = constrain(90 + relativeBearingDeg, 0, 180) * 100;
   packet.distance_mm =
       sample.valid ? sample.mm : Protocol::UNKNOWN_DISTANCE_MM;
   packet.valid = sample.valid;
@@ -928,6 +1333,7 @@ void serviceAuto() {
                                 : Protocol::UNKNOWN_DISTANCE_MM;
         latestCenterTofStatus = sample.status;
         lastCenterTofAtMs = now;
+        if (sample.valid) lastCenterTofValidAtMs = now;
       }
       sendScan(sample);
       if (++scanIndex < Threshold::SCAN_ANGLE_COUNT) {
@@ -1003,6 +1409,20 @@ void serviceAuto() {
   }
 }
 
+void serviceManualObstacleScan() {
+  const uint32_t now = millis();
+  if (!armed || !tofReady || !servoReady || observationOnlyScan ||
+      autoPhase != AutoPhase::IDLE ||
+      driveState != Protocol::DriveState::MANUAL ||
+      !frontGate.snapshot(now).forward_blocked ||
+      targetLeft != 0 || targetRight != 0 ||
+      appliedLeft != 0 || appliedRight != 0) return;
+  if (lastScanCompletedAtMs &&
+      !elapsed(now, lastScanCompletedAtMs,
+               Threshold::MANUAL_SCAN_COOLDOWN_MS)) return;
+  beginAutoScan(true);
+}
+
 void processCommand(const Protocol::CommandPacket& packet,
                     uint32_t receivedAtMs) {
   const auto command =
@@ -1013,6 +1433,26 @@ void processCommand(const Protocol::CommandPacket& packet,
     sendAck(packet.header.sequence, Protocol::AckStatus::REJECTED,
             Protocol::AckReason::BAD_TTL);
     return;
+  }
+  if (validationTest.phase != ValidationTestPhase::IDLE) {
+    if (validationTest.type == ValidationTestType::NOISE &&
+        command == Protocol::DriveCommand::STOP && packet.mode == 0) {
+      activeSession = packet.header.session_id;
+      lastCommandSequence = packet.header.sequence;
+      armed = false;
+      lastValidCommandAtMs = receivedAtMs;
+      acceptedCommandTtlMs = packet.ttl_ms;
+      activeBrake(false);
+      sendAck(packet.header.sequence, Protocol::AckStatus::ACCEPTED,
+              Protocol::AckReason::NONE);
+      return;
+    }
+    cancelValidationTest("radio command received");
+    if (command != Protocol::DriveCommand::STOP) {
+      sendAck(packet.header.sequence, Protocol::AckStatus::REJECTED,
+              Protocol::AckReason::DISARMED);
+      return;
+    }
   }
   if (command == Protocol::DriveCommand::STOP) {
     activeSession = packet.header.session_id;
@@ -1057,14 +1497,18 @@ void processCommand(const Protocol::CommandPacket& packet,
               Protocol::AckReason::SENSOR_UNAVAILABLE);
       return;
     }
-    const bool modeChanged =
-        driveState != Protocol::DriveState::MANUAL;
     armed = true;
     stallSuspected = false;
-    autoPhase = AutoPhase::IDLE;
-    observationOnlyScan = false;
-    if (modeChanged) activeBrake(false);
-    driveState = Protocol::DriveState::MANUAL;
+    // The gateway refreshes its last requested command. Do not let a repeated
+    // MANUAL packet abort a stationary observation sweep that was explicitly
+    // requested by the dashboard. Motors remain actively stopped throughout.
+    if (!observationOnlyScan) {
+      const bool modeChanged =
+          driveState != Protocol::DriveState::MANUAL;
+      autoPhase = AutoPhase::IDLE;
+      if (modeChanged) activeBrake(false);
+      driveState = Protocol::DriveState::MANUAL;
+    }
   } else if (command == Protocol::DriveCommand::AUTO &&
              packet.mode == 1) {
     if (!autoCalibrated()) {
@@ -1093,15 +1537,44 @@ void processCommand(const Protocol::CommandPacket& packet,
       sendEvent(Protocol::EventCode::AUTO_STARTED, 0);
     }
   } else if (command == Protocol::DriveCommand::DRIVE) {
+    const int16_t left =
+        constrain(packet.left_percent, -100, 100) * 255 / 100;
+    const int16_t right =
+        constrain(packet.right_percent, -100, 100) * 255 / 100;
+    // A reverse or pivot command cancels an observation-only sweep
+    // immediately. A forward command must wait for the centered re-check.
+    const bool escapeCommand = (left != 0 || right != 0) &&
+        !Safety::FrontSafetyGate::requestsForward(left, right);
+    if (armed && observationOnlyScan && left == 0 && right == 0) {
+      // Keep the command lease alive without interrupting the stationary
+      // sweep. No motion request is evaluated or applied in this branch.
+      sendAck(packet.header.sequence, Protocol::AckStatus::ACCEPTED,
+              Protocol::AckReason::NONE);
+      return;
+    }
+    if (armed && observationOnlyScan &&
+        Safety::FrontSafetyGate::requestsForward(left, right)) {
+      // The rover is still armed; only the requested direction is held while
+      // the scanner is away from center. Report the real reason instead of
+      // the misleading DISARMED reason used by the generic mode check below.
+      sendAck(packet.header.sequence, Protocol::AckStatus::REJECTED,
+              Protocol::AckReason::FRONT_BLOCKED);
+      return;
+    }
+    if (armed && observationOnlyScan && escapeCommand) {
+      observationOnlyScan = false;
+      autoPhase = AutoPhase::IDLE;
+      currentServoDeg = calibration.servo_center_deg
+                            ? calibration.servo_center_deg
+                            : Threshold::SERVO_CENTER_DEG;
+      writeScanServo(currentServoDeg);
+      driveState = Protocol::DriveState::MANUAL;
+    }
     if (!armed || driveState != Protocol::DriveState::MANUAL) {
       sendAck(packet.header.sequence, Protocol::AckStatus::REJECTED,
               Protocol::AckReason::DISARMED);
       return;
     }
-    const int16_t left =
-        constrain(packet.left_percent, -100, 100) * 255 / 100;
-    const int16_t right =
-        constrain(packet.right_percent, -100, 100) * 255 / 100;
     if (!requestMotion(left, right,
                        Protocol::DriveState::MANUAL)) {
       sendAck(packet.header.sequence, Protocol::AckStatus::REJECTED,
@@ -1128,6 +1601,28 @@ void drainCommand() {
   }
   portEXIT_CRITICAL(&radioMux);
   if (receivedAt) processCommand(packet, receivedAt);
+}
+
+void serviceProtocolMismatch() {
+  bool mismatch = false;
+  uint8_t receivedVersion = 0;
+  portENTER_CRITICAL(&radioMux);
+  if (protocolMismatchPending) {
+    mismatch = true;
+    receivedVersion = incompatibleProtocolVersion;
+    protocolMismatchPending = false;
+  }
+  portEXIT_CRITICAL(&radioMux);
+  if (!mismatch) return;
+  armed = false;
+  autoPhase = AutoPhase::IDLE;
+  observationOnlyScan = false;
+  cancelValidationTest("protocol_version_mismatch");
+  activeBrake(true);
+  Serial.printf(
+      "PROTOCOL_MISMATCH expected=%u received=%u SAFE_STOP\n",
+      Protocol::PROTOCOL_VERSION, receivedVersion);
+  sendEvent(Protocol::EventCode::COMMAND_REJECTED, 2, receivedVersion);
 }
 
 uint16_t buildStatusFlags() {
@@ -1218,12 +1713,13 @@ void processDiagnostic(const Protocol::DiagnosticCommandPacket& request) {
   switch (action) {
     case Protocol::DiagnosticAction::STATUS: {
       const auto front = frontGate.snapshot(millis());
+      const EncoderSnapshot encoders = encoderSnapshot();
       a = buildStatusFlags();
       b = front.has_valid_distance
               ? static_cast<int32_t>(front.last_valid_cm * 10.0f)
               : -1;
-      c = leftTicks;
-      d = rightTicks;
+      c = encoders.leftAccepted;
+      d = encoders.rightAccepted;
       break;
     }
     case Protocol::DiagnosticAction::I2C_SCAN: {
@@ -1309,19 +1805,29 @@ void processDiagnostic(const Protocol::DiagnosticCommandPacket& request) {
                    : Protocol::DiagnosticStatus::FAILED;
       break;
     }
-    case Protocol::DiagnosticAction::ENCODERS:
-      a = leftTicks;
-      b = rightTicks;
-      c = digitalRead(Pin::LEFT_ENCODER);
-      d = digitalRead(Pin::RIGHT_ENCODER);
+    case Protocol::DiagnosticAction::ENCODERS: {
+      const EncoderSnapshot encoders = encoderSnapshot();
+      a = encoders.leftRaw;
+      b = encoders.rightRaw;
+      c = encoders.leftAccepted;
+      d = encoders.rightAccepted;
       status = calibration.micrometers_per_tick
                    ? Protocol::DiagnosticStatus::OK
                    : Protocol::DiagnosticStatus::WARNING;
       break;
+    }
     case Protocol::DiagnosticAction::START_SCAN:
-      if (armed || !servoReady || !tofReady || autoPhase != AutoPhase::IDLE) {
+      // An armed rover may perform an explicit observation-only sweep, but
+      // only while stationary and otherwise healthy. This never transfers
+      // motion control to the rover or starts the legacy AUTO advance state.
+      if (!servoReady || !tofReady || gyroCalibrationActive || waterContact ||
+          tiltStopped || stallSuspected || autoPhase != AutoPhase::IDLE ||
+          (armed && driveState != Protocol::DriveState::MANUAL) ||
+          targetLeft != 0 || targetRight != 0 || appliedLeft != 0 ||
+          appliedRight != 0) {
         status = Protocol::DiagnosticStatus::REJECTED;
       } else {
+        activeBrake(false);
         beginAutoScan(true);
         a = scanId;
       }
@@ -1468,9 +1974,16 @@ void sendTelemetry() {
                Protocol::TELEMETRY_INTERVAL_MS)) return;
   lastTelemetryAtMs = now;
   Protocol::TelemetryPacket packet{};
+  const EncoderSnapshot encoders = encoderSnapshot();
   fillHeader(packet.header, Protocol::MessageType::TELEMETRY);
-  packet.left_ticks = leftTicks;
-  packet.right_ticks = rightTicks;
+  packet.left_ticks = encoders.leftAccepted;
+  packet.right_ticks = encoders.rightAccepted;
+  packet.left_raw_ticks = encoders.leftRaw;
+  packet.right_raw_ticks = encoders.rightRaw;
+  packet.left_rejected_debounce_ticks = encoders.leftRejectedDebounce;
+  packet.right_rejected_debounce_ticks = encoders.rightRejectedDebounce;
+  packet.left_rejected_state_ticks = encoders.leftRejectedState;
+  packet.right_rejected_state_ticks = encoders.rightRejectedState;
   packet.heading_cdeg =
       imuSampleValid ? static_cast<uint16_t>(headingDeg * 100.0f) : 0;
   packet.pitch_cdeg =
@@ -1478,13 +1991,16 @@ void sendTelemetry() {
   packet.roll_cdeg =
       imuSampleValid ? static_cast<int16_t>(rollDeg * 100.0f) : 0;
   const auto front = frontGate.snapshot(now);
-  packet.front_mm =
-      front.has_valid_distance &&
-              front.freshness == Safety::RangeFreshness::FRESH
-          ? static_cast<uint16_t>(front.last_valid_cm * 10.0f)
-          : Protocol::UNKNOWN_DISTANCE_MM;
+  packet.front_mm = lastUltrasonicValidAtMs &&
+                            !elapsed(now, lastUltrasonicValidAtMs,
+                                     Threshold::FRONT_FUSION_STALE_MS) &&
+                            isfinite(latestUltrasonicCm)
+                        ? static_cast<uint16_t>(latestUltrasonicCm * 10.0f)
+                        : Protocol::UNKNOWN_DISTANCE_MM;
   packet.tof_mm = lastCenterTofAtMs &&
-                          !elapsed(now, lastCenterTofAtMs, 1000) &&
+                          !elapsed(now, lastCenterTofAtMs,
+                                   Threshold::FRONT_FUSION_STALE_MS) &&
+                          latestCenterTofStatus != 4 &&
                           latestCenterTofMm != Protocol::UNKNOWN_DISTANCE_MM
                       ? latestCenterTofMm
                       : Protocol::UNKNOWN_DISTANCE_MM;
@@ -1495,6 +2011,16 @@ void sendTelemetry() {
   packet.chassis_width_mm = calibration.chassis_width_mm;
   packet.track_width_mm = calibration.track_width_mm;
   packet.micrometers_per_tick = calibration.micrometers_per_tick;
+  const float leftMicrometersPerTick = encoderConfig.leftTicksPerMeter > 0.0f
+      ? 1000000.0f / encoderConfig.leftTicksPerMeter : 0.0f;
+  const float rightMicrometersPerTick = encoderConfig.rightTicksPerMeter > 0.0f
+      ? 1000000.0f / encoderConfig.rightTicksPerMeter : 0.0f;
+  packet.left_micrometers_per_tick =
+      leftMicrometersPerTick >= 1.0f && leftMicrometersPerTick <= UINT16_MAX
+          ? static_cast<uint16_t>(roundf(leftMicrometersPerTick)) : 0;
+  packet.right_micrometers_per_tick =
+      rightMicrometersPerTick >= 1.0f && rightMicrometersPerTick <= UINT16_MAX
+          ? static_cast<uint16_t>(roundf(rightMicrometersPerTick)) : 0;
   packet.temperature_centi_c =
       lastDhtValidAtMs
           ? static_cast<int16_t>(temperatureC * 100.0f)
@@ -1585,14 +2111,348 @@ void printStatus() {
       gyroCalibrationActive);
 }
 
+void printEncoderStatus() {
+  const EncoderSnapshot encoders = encoderSnapshot();
+  const double leftAverageUs = encoders.leftIntervalCount
+      ? static_cast<double>(encoders.leftIntervalSumUs) /
+            encoders.leftIntervalCount
+      : 0.0;
+  const double rightAverageUs = encoders.rightIntervalCount
+      ? static_cast<double>(encoders.rightIntervalSumUs) /
+            encoders.rightIntervalCount
+      : 0.0;
+  Serial.printf(
+      "ENC raw L=%lu R=%lu accepted L=%ld R=%ld\n",
+      static_cast<unsigned long>(encoders.leftRaw),
+      static_cast<unsigned long>(encoders.rightRaw),
+      static_cast<long>(encoders.leftAccepted),
+      static_cast<long>(encoders.rightAccepted));
+  Serial.printf(
+      "ENC rejected_debounce L=%lu R=%lu rejected_state L=%lu R=%lu\n",
+      static_cast<unsigned long>(encoders.leftRejectedDebounce),
+      static_cast<unsigned long>(encoders.rightRejectedDebounce),
+      static_cast<unsigned long>(encoders.leftRejectedState),
+      static_cast<unsigned long>(encoders.rightRejectedState));
+  Serial.printf(
+      "ENC interval_us L min=%lu avg=%.1f max=%lu n=%lu | R min=%lu avg=%.1f max=%lu n=%lu\n",
+      encoders.leftIntervalCount
+          ? static_cast<unsigned long>(encoders.leftMinIntervalUs) : 0UL,
+      leftAverageUs, static_cast<unsigned long>(encoders.leftMaxIntervalUs),
+      static_cast<unsigned long>(encoders.leftIntervalCount),
+      encoders.rightIntervalCount
+          ? static_cast<unsigned long>(encoders.rightMinIntervalUs) : 0UL,
+      rightAverageUs, static_cast<unsigned long>(encoders.rightMaxIntervalUs),
+      static_cast<unsigned long>(encoders.rightIntervalCount));
+  Serial.printf(
+      "ENC config edge=FALLING min_pulse_us=%lu gate=%u active_duty=%d coast_ms=%lu tpm L=%.3f R=%.3f track_m=%.4f\n",
+      static_cast<unsigned long>(encoderConfig.minPulseUs),
+      encoderConfig.useMotorStateGate,
+      encoderConfig.motorActiveThreshold,
+      static_cast<unsigned long>(encoderConfig.coastGraceMs),
+      encoderConfig.leftTicksPerMeter, encoderConfig.rightTicksPerMeter,
+      encoderConfig.effectiveTrackWidthM);
+  Serial.printf("SAFETY measured_stop_m=%.3f resume_m=%.3f\n",
+                encoderConfig.stopDistanceM,
+                encoderConfig.resumeDistanceM);
+  Serial.printf(
+      "ENC attribution direction L=%d R=%d applied_pwm L=%d R=%d input_level L=%d R=%d\n",
+      leftEncoderDirection, rightEncoderDirection, appliedLeft, appliedRight,
+      digitalRead(Pin::LEFT_ENCODER), digitalRead(Pin::RIGHT_ENCODER));
+}
+
+void printConfig() {
+  printStatus();
+  printEncoderStatus();
+  Serial.printf(
+      "BALANCE encoder=%u gyro=%u encoder_kp=%.4f gyro_kp=%.4f max_trim=%.2f window_ms=%lu (disabled until measured tuning)\n",
+      encoderConfig.useEncoderBalance, encoderConfig.useGyroBalance,
+      encoderConfig.encoderKp, encoderConfig.gyroKp,
+      encoderConfig.maxBalanceCorrection,
+      static_cast<unsigned long>(encoderConfig.balanceWindowMs));
+}
+
+const char* validationTestName(ValidationTestType type) {
+  switch (type) {
+    case ValidationTestType::NOISE: return "noise";
+    case ValidationTestType::LEFT_ONLY: return "left_only";
+    case ValidationTestType::RIGHT_ONLY: return "right_only";
+    case ValidationTestType::STRAIGHT: return "straight";
+    case ValidationTestType::TURN: return "turn";
+    case ValidationTestType::NONE: break;
+  }
+  return "none";
+}
+
+void printValidationResult(const char* outcome, const char* reason) {
+  const EncoderSnapshot encoders = encoderSnapshot();
+  const double leftAverageUs = encoders.leftIntervalCount
+      ? static_cast<double>(encoders.leftIntervalSumUs) /
+            encoders.leftIntervalCount : 0.0;
+  const double rightAverageUs = encoders.rightIntervalCount
+      ? static_cast<double>(encoders.rightIntervalSumUs) /
+            encoders.rightIntervalCount : 0.0;
+  const uint32_t observedMs = validationTest.phase ==
+          ValidationTestPhase::RUNNING
+      ? millis() - validationTest.phaseStartedAtMs : 0;
+  const float seconds = observedMs / 1000.0f;
+  Serial.printf(
+      "VALIDATION_RESULT outcome=%s test=%s reason=%s requested_ms=%lu observed_ms=%lu command_left=%d command_right=%d raw_left=%lu raw_right=%lu accepted_left=%ld accepted_right=%ld debounce_left=%lu debounce_right=%lu state_left=%lu state_right=%lu rate_left_hz=%.3f rate_right_hz=%.3f interval_left_min_us=%lu interval_left_avg_us=%.1f interval_left_max_us=%lu interval_right_min_us=%lu interval_right_avg_us=%.1f interval_right_max_us=%lu input_left=%d input_right=%d\n",
+      outcome, validationTestName(validationTest.type), reason,
+      static_cast<unsigned long>(validationTest.durationMs),
+      static_cast<unsigned long>(observedMs),
+      validationTest.leftDuty, validationTest.rightDuty,
+      static_cast<unsigned long>(encoders.leftRaw),
+      static_cast<unsigned long>(encoders.rightRaw),
+      static_cast<long>(encoders.leftAccepted),
+      static_cast<long>(encoders.rightAccepted),
+      static_cast<unsigned long>(encoders.leftRejectedDebounce),
+      static_cast<unsigned long>(encoders.rightRejectedDebounce),
+      static_cast<unsigned long>(encoders.leftRejectedState),
+      static_cast<unsigned long>(encoders.rightRejectedState),
+      seconds > 0.0f ? encoders.leftRaw / seconds : 0.0f,
+      seconds > 0.0f ? encoders.rightRaw / seconds : 0.0f,
+      encoders.leftIntervalCount
+          ? static_cast<unsigned long>(encoders.leftMinIntervalUs) : 0UL,
+      leftAverageUs, static_cast<unsigned long>(encoders.leftMaxIntervalUs),
+      encoders.rightIntervalCount
+          ? static_cast<unsigned long>(encoders.rightMinIntervalUs) : 0UL,
+      rightAverageUs, static_cast<unsigned long>(encoders.rightMaxIntervalUs),
+      digitalRead(Pin::LEFT_ENCODER), digitalRead(Pin::RIGHT_ENCODER));
+}
+
+void finishValidationTest(const char* outcome, const char* reason) {
+  activeBrake(false);
+  printValidationResult(outcome, reason);
+  printEncoderStatus();
+  validationTest = ValidationTest{};
+  Serial.println("VALIDATION_IDLE motors actively braked");
+}
+
+void cancelValidationTest(const char* reason) {
+  if (validationTest.phase == ValidationTestPhase::IDLE) return;
+  finishValidationTest("ABORTED", reason);
+}
+
+bool scheduleValidationTest(ValidationTestType type, int16_t leftDuty,
+                            int16_t rightDuty, uint32_t durationMs) {
+  if (validationTest.phase != ValidationTestPhase::IDLE || armed ||
+      autoPhase != AutoPhase::IDLE || benchMotionUntilMs || !brakeLatched) {
+    Serial.println(
+        "REJECTED validation test requires disarmed rover, idle autonomy, and active brake");
+    return false;
+  }
+  if (!motorPwmReady && type != ValidationTestType::NOISE) {
+    Serial.println("REJECTED motor PWM is unavailable");
+    return false;
+  }
+  resetEncoderCounters();
+  validationTest.type = type;
+  validationTest.phase = type == ValidationTestType::NOISE
+      ? ValidationTestPhase::RUNNING : ValidationTestPhase::COUNTDOWN;
+  validationTest.leftDuty = leftDuty;
+  validationTest.rightDuty = rightDuty;
+  validationTest.durationMs = durationMs;
+  validationTest.phaseStartedAtMs = millis();
+  validationTest.lastLeaseAtMs = validationTest.phaseStartedAtMs;
+  validationTest.lastCountdownSecond = UINT8_MAX;
+  if (type == ValidationTestType::NOISE) {
+    Serial.printf(
+        "VALIDATION_START test=noise duration_ms=%lu motors=ACTIVE_BRAKE raw_edges_must_remain_visible stop=cancel\n",
+        static_cast<unsigned long>(durationMs));
+  } else {
+    Serial.printf(
+        "WARNING validation test=%s command_left=%d command_right=%d duration_ms=%lu; keep physical motor switch reachable; type stop to cancel\n",
+        validationTestName(type), leftDuty, rightDuty,
+        static_cast<unsigned long>(durationMs));
+    Serial.println(
+        type == ValidationTestType::LEFT_ONLY ||
+                type == ValidationTestType::RIGHT_ONLY
+            ? "WARNING LIFT ALL WHEELS CLEAR OF THE GROUND"
+            : "WARNING CLEAR THE FLOOR COURSE AND KEEP HANDS AWAY FROM WHEELS");
+  }
+  return true;
+}
+
+void serviceValidationTest() {
+  if (validationTest.phase == ValidationTestPhase::IDLE) return;
+  const uint32_t now = millis();
+  if (validationTest.type != ValidationTestType::NOISE &&
+      now - validationTest.lastLeaseAtMs >
+          Threshold::VALIDATION_LEASE_TIMEOUT_MS) {
+    cancelValidationTest("validation_console_lease_expired");
+    return;
+  }
+  if (validationTest.phase == ValidationTestPhase::COUNTDOWN) {
+    if (armed || !brakeLatched || autoPhase != AutoPhase::IDLE) {
+      cancelValidationTest("safety_state_changed");
+      return;
+    }
+    const uint32_t elapsedMs = now - validationTest.phaseStartedAtMs;
+    if (elapsedMs < Threshold::VALIDATION_COUNTDOWN_MS) {
+      const uint8_t seconds = static_cast<uint8_t>(
+          (Threshold::VALIDATION_COUNTDOWN_MS - elapsedMs + 999) / 1000);
+      if (seconds != validationTest.lastCountdownSecond) {
+        validationTest.lastCountdownSecond = seconds;
+        Serial.printf("VALIDATION_COUNTDOWN %u type=stop_to_cancel\n", seconds);
+      }
+      return;
+    }
+    resetEncoderCounters();
+    if (!requestMotion(validationTest.leftDuty, validationTest.rightDuty,
+                       Protocol::DriveState::MANUAL)) {
+      finishValidationTest("ABORTED", "motion_rejected_by_safety_gate");
+      return;
+    }
+    validationTest.phase = ValidationTestPhase::RUNNING;
+    validationTest.phaseStartedAtMs = now;
+    Serial.printf("VALIDATION_MOTION_STARTED test=%s timeout_ms=%lu\n",
+                  validationTestName(validationTest.type),
+                  static_cast<unsigned long>(validationTest.durationMs));
+    return;
+  }
+
+  if (validationTest.type != ValidationTestType::NOISE &&
+      (armed || brakeLatched || waterContact || tiltStopped ||
+       stallSuspected || driveState == Protocol::DriveState::STUCK)) {
+    finishValidationTest("ABORTED", "safety_stop_or_state_change");
+    return;
+  }
+  if (now - validationTest.phaseStartedAtMs >= validationTest.durationMs) {
+    finishValidationTest("COMPLETE", "bounded_timeout");
+  }
+}
+
+bool parseValidationDirection(const char* word, int& sign) {
+  if (strcmp(word, "forward") == 0 || strcmp(word, "fwd") == 0 ||
+      strcmp(word, "left") == 0) {
+    sign = 1;
+    return true;
+  }
+  if (strcmp(word, "reverse") == 0 || strcmp(word, "rev") == 0 ||
+      strcmp(word, "right") == 0) {
+    sign = -1;
+    return true;
+  }
+  return false;
+}
+
+void handleValidationCommand(const String& command) {
+  if (command == "test heartbeat") {
+    if (validationTest.phase == ValidationTestPhase::IDLE) {
+      Serial.println("VALIDATION_IDLE heartbeat ignored");
+    } else {
+      validationTest.lastLeaseAtMs = millis();
+    }
+    return;
+  }
+  if (command == "test status") {
+    Serial.printf("VALIDATION_STATUS phase=%u test=%s\n",
+                  static_cast<unsigned>(validationTest.phase),
+                  validationTestName(validationTest.type));
+    if (validationTest.phase != ValidationTestPhase::IDLE)
+      printEncoderStatus();
+    return;
+  }
+  unsigned long seconds = 0;
+  if (sscanf(command.c_str(), "test noise %lu", &seconds) == 1) {
+    const uint32_t durationMs = seconds * 1000UL;
+    if (durationMs < Threshold::VALIDATION_MIN_NOISE_MS ||
+        durationMs > Threshold::VALIDATION_MAX_NOISE_MS) {
+      Serial.println("REJECTED noise duration must be 10..60 seconds");
+      return;
+    }
+    scheduleValidationTest(ValidationTestType::NOISE, 0, 0, durationMs);
+    return;
+  }
+
+  char side[8]{}, direction[8]{};
+  int pwm = 0;
+  unsigned long durationMs = 0;
+  if (sscanf(command.c_str(), "test side %7s %7s %d %lu", side, direction,
+             &pwm, &durationMs) == 4) {
+    int sign = 0;
+    if ((strcmp(side, "left") != 0 && strcmp(side, "right") != 0) ||
+        !parseValidationDirection(direction, sign) ||
+        (strcmp(direction, "left") == 0 || strcmp(direction, "right") == 0) ||
+        pwm < Threshold::VALIDATION_MIN_DUTY ||
+        pwm > Threshold::VALIDATION_MAX_DUTY || durationMs < 100 ||
+        durationMs > Threshold::VALIDATION_MAX_LIFTED_RUN_MS) {
+      Serial.println(
+          "REJECTED use test side left|right forward|reverse <PWM 80..170> <ms 100..3000>");
+      return;
+    }
+    const bool left = strcmp(side, "left") == 0;
+    scheduleValidationTest(left ? ValidationTestType::LEFT_ONLY
+                                : ValidationTestType::RIGHT_ONLY,
+                           left ? sign * pwm : 0,
+                           left ? 0 : sign * pwm, durationMs);
+    return;
+  }
+
+  if (sscanf(command.c_str(), "test straight %7s %d %lu", direction, &pwm,
+             &durationMs) == 3) {
+    int sign = 0;
+    if (!parseValidationDirection(direction, sign) ||
+        (strcmp(direction, "left") == 0 || strcmp(direction, "right") == 0) ||
+        pwm < Threshold::VALIDATION_MIN_DUTY ||
+        pwm > Threshold::VALIDATION_MAX_DUTY || durationMs < 100 ||
+        durationMs > Threshold::VALIDATION_MAX_GROUND_RUN_MS) {
+      Serial.println(
+          "REJECTED use test straight forward|reverse <PWM 80..170> <ms 100..5000>");
+      return;
+    }
+    scheduleValidationTest(ValidationTestType::STRAIGHT,
+                           sign * pwm, sign * pwm, durationMs);
+    return;
+  }
+
+  if (sscanf(command.c_str(), "test turn %7s %d %lu", direction, &pwm,
+             &durationMs) == 3) {
+    int sign = 0;
+    if (!parseValidationDirection(direction, sign) ||
+        (strcmp(direction, "forward") == 0 ||
+         strcmp(direction, "fwd") == 0 ||
+         strcmp(direction, "reverse") == 0 ||
+         strcmp(direction, "rev") == 0) ||
+        pwm < Threshold::VALIDATION_MIN_DUTY ||
+        pwm > Threshold::VALIDATION_MAX_DUTY || durationMs < 100 ||
+        durationMs > Threshold::VALIDATION_MAX_LIFTED_RUN_MS) {
+      Serial.println(
+          "REJECTED use test turn left|right <PWM 80..170> <ms 100..3000>");
+      return;
+    }
+    scheduleValidationTest(ValidationTestType::TURN,
+                           -sign * pwm, sign * pwm, durationMs);
+    return;
+  }
+  Serial.println("Validation commands:");
+  Serial.println("  test noise <seconds 10..60>");
+  Serial.println("  test side left|right forward|reverse <PWM 80..170> <ms 100..3000>");
+  Serial.println("  test straight forward|reverse <PWM 80..170> <ms 100..5000>");
+  Serial.println("  test turn left|right <PWM 80..170> <ms 100..3000>");
+  Serial.println("  test status | test heartbeat | stop");
+}
+
 void handleSerialCommand(String command) {
   command.trim();
   command.toLowerCase();
   if (!command.length()) return;
+  if (validationTest.phase != ValidationTestPhase::IDLE &&
+      (command == "stop" || command == "brake")) {
+    cancelValidationTest("operator_stop");
+    return;
+  }
+  if (validationTest.phase != ValidationTestPhase::IDLE &&
+      command != "test status" && command != "test heartbeat" &&
+      command != "enc") {
+    Serial.println("REJECTED validation test active; use stop");
+    return;
+  }
   const bool benchMotionCommand = command == "fwd" || command == "rev" ||
                                   command == "left" || command == "right";
-  if (benchMotionCommand && armed) {
-    Serial.println("REJECTED bench motion requires radio session disarmed");
+  if (benchMotionCommand) {
+    Serial.println(
+        "REJECTED legacy bench burst disabled; use the leased test commands and validation runner");
     return;
   }
   if (command.startsWith("cal ") && command != "cal clear" &&
@@ -1605,7 +2465,160 @@ void handleSerialCommand(String command) {
         "REJECTED calibration requires disarmed active brake; stopped now, run command again");
     return;
   }
-  if (command == "status") printStatus();
+  if (command.startsWith("test ")) handleValidationCommand(command);
+  else if (command == "status") printStatus();
+  else if (command == "enc") printEncoderStatus();
+  else if (command == "resetenc") {
+    if (armed || !brakeLatched) {
+      activeBrake(false);
+      Serial.println(
+          "REJECTED encoder reset requires disarmed active brake; stopped now, run command again");
+    } else {
+      resetEncoderCounters();
+      Serial.println("ENCODER COUNTERS RESET; FALLING-edge interrupts remain armed");
+    }
+  } else if (command.startsWith("encdebounce ")) {
+    const int value = command.substring(12).toInt();
+    if (armed || !brakeLatched) {
+      Serial.println("REJECTED encdebounce requires disarmed active brake");
+    } else if (value < 100 || value > 20000) {
+      Serial.println("REJECTED encdebounce range is 100..20000 microseconds");
+    } else {
+      portENTER_CRITICAL(&encoderMux);
+      encoderConfig.minPulseUs = value;
+      portEXIT_CRITICAL(&encoderMux);
+      saveEncoderConfig();
+      Serial.printf("RECORDED encoder minimum pulse interval=%d us\n", value);
+    }
+  } else if (command == "encgate on" || command == "encgate off") {
+    if (armed || !brakeLatched) {
+      Serial.println("REJECTED encgate change requires disarmed active brake");
+    } else {
+      portENTER_CRITICAL(&encoderMux);
+      encoderConfig.useMotorStateGate = command.endsWith("on");
+      portEXIT_CRITICAL(&encoderMux);
+      saveEncoderConfig();
+      Serial.printf(
+          "RECORDED encoder motor-state gate=%s; raw counts remain visible\n",
+          encoderConfig.useMotorStateGate ? "on" : "off");
+    }
+  } else if (command.startsWith("encscale ")) {
+    char side[8]{};
+    float value = 0.0f;
+    if (armed || !brakeLatched) {
+      Serial.println("REJECTED encscale requires disarmed active brake");
+    } else if (sscanf(command.c_str(), "encscale %7s %f", side, &value) != 2 ||
+               !isfinite(value) || value < 10.0f || value > 100000.0f) {
+      Serial.println(
+          "REJECTED use encscale left|right <measured ticks-per-metre 10..100000>");
+    } else if (strcmp(side, "left") == 0) {
+      encoderConfig.leftTicksPerMeter = value;
+      saveEncoderConfig();
+      Serial.printf("RECORDED left encoder ticks_per_metre=%.3f\n", value);
+    } else if (strcmp(side, "right") == 0) {
+      encoderConfig.rightTicksPerMeter = value;
+      saveEncoderConfig();
+      Serial.printf("RECORDED right encoder ticks_per_metre=%.3f\n", value);
+    } else {
+      Serial.println("REJECTED encoder side must be left or right");
+    }
+  } else if (command.startsWith("balance config ")) {
+    float encoderKp = 0.0f, gyroKp = 0.0f, maximum = 0.0f;
+    unsigned long windowMs = 0;
+    if (armed || !brakeLatched) {
+      Serial.println("REJECTED balance configuration requires disarmed active brake");
+    } else if (sscanf(command.c_str(), "balance config %f %f %f %lu",
+                      &encoderKp, &gyroKp, &maximum, &windowMs) != 4 ||
+               !isfinite(encoderKp) || encoderKp < 0.0f ||
+               encoderKp > 5000.0f || !isfinite(gyroKp) || gyroKp < 0.0f ||
+               gyroKp > 10.0f || !isfinite(maximum) || maximum < 0.0f ||
+               maximum > 40.0f || windowMs < 20 || windowMs > 2000) {
+      Serial.println(
+          "REJECTED use balance config <encoder_kp 0..5000> <gyro_kp 0..10> <max_pwm_trim 0..40> <window_ms 20..2000>");
+    } else {
+      encoderConfig.encoderKp = encoderKp;
+      encoderConfig.gyroKp = gyroKp;
+      encoderConfig.maxBalanceCorrection = maximum;
+      encoderConfig.balanceWindowMs = windowMs;
+      encoderConfig.useEncoderBalance = false;
+      encoderConfig.useGyroBalance = false;
+      saveEncoderConfig();
+      Serial.println(
+          "RECORDED balance gains; correction remains disabled until explicitly enabled after measured straight-run tuning");
+    }
+  } else if (command == "balance encoder on" ||
+             command == "balance encoder off") {
+    const bool enable = command.endsWith("on");
+    if (armed || !brakeLatched) {
+      Serial.println("REJECTED balance change requires disarmed active brake");
+    } else if (enable &&
+               (encoderConfig.leftTicksPerMeter <= 0.0f ||
+                encoderConfig.rightTicksPerMeter <= 0.0f ||
+                encoderConfig.effectiveTrackWidthM <= 0.0f ||
+                encoderConfig.encoderKp <= 0.0f ||
+                encoderConfig.maxBalanceCorrection <= 0.0f)) {
+      Serial.println(
+          "REJECTED encoder balance requires per-side ticks/metre, effective track width, and measured nonzero gains");
+    } else {
+      encoderConfig.useEncoderBalance = enable;
+      saveEncoderConfig();
+      Serial.printf("RECORDED encoder balance=%s\n", enable ? "on" : "off");
+    }
+  } else if (command == "balance gyro on" || command == "balance gyro off") {
+    const bool enable = command.endsWith("on");
+    if (armed || !brakeLatched) {
+      Serial.println("REJECTED balance change requires disarmed active brake");
+    } else if (enable &&
+               (!calibration.gyro_bias_known || encoderConfig.gyroKp <= 0.0f ||
+                encoderConfig.maxBalanceCorrection <= 0.0f)) {
+      Serial.println(
+          "REJECTED gyro balance requires a valid stationary gyro bias and measured nonzero gains");
+    } else {
+      encoderConfig.useGyroBalance = enable;
+      saveEncoderConfig();
+      Serial.printf("RECORDED gyro balance=%s\n", enable ? "on" : "off");
+    }
+  } else if (command.startsWith("config safety ")) {
+    float stopM = 0.0f, resumeM = 0.0f;
+    if (armed || !brakeLatched) {
+      Serial.println("REJECTED safety thresholds require disarmed active brake");
+    } else if (sscanf(command.c_str(), "config safety %f %f", &stopM,
+                      &resumeM) != 2 ||
+               !isfinite(stopM) || !isfinite(resumeM) || stopM < 0.10f ||
+               stopM > 2.0f || resumeM <= stopM || resumeM > 2.5f) {
+      Serial.println(
+          "REJECTED use config safety <stop_m 0.10..2.00> <resume_m >stop..2.50>");
+    } else {
+      encoderConfig.stopDistanceM = stopM;
+      encoderConfig.resumeDistanceM = resumeM;
+      frontGate.setThresholds(stopM * 100.0f, resumeM * 100.0f);
+      saveEncoderConfig();
+      Serial.printf("RECORDED safety stop_m=%.3f resume_m=%.3f\n",
+                    stopM, resumeM);
+    }
+  } else if (command == "config show") {
+    printConfig();
+  } else if (command == "config save") {
+    if (encoderConfigValid(encoderConfig)) {
+      saveEncoderConfig();
+      Serial.println("CONFIG SAVED after validation");
+    } else {
+      Serial.println("REJECTED invalid encoder configuration");
+    }
+  } else if (command == "config reset") {
+    if (armed || !brakeLatched) {
+      Serial.println("REJECTED config reset requires disarmed active brake");
+    } else {
+      portENTER_CRITICAL(&encoderMux);
+      encoderConfig = EncoderConfig{};
+      portEXIT_CRITICAL(&encoderMux);
+      frontGate.setThresholds(encoderConfig.stopDistanceM * 100.0f,
+                              encoderConfig.resumeDistanceM * 100.0f);
+      saveEncoderConfig();
+      Serial.println(
+          "ENCODER CONFIG RESET to commissioning defaults; geometry remains uncalibrated");
+    }
+  }
   else if (command == "front") {
     sampleFront(true);
     printStatus();
@@ -1659,6 +2672,8 @@ void handleSerialCommand(String command) {
     if (value >= 100 && value <= 600) {
       calibration.track_width_mm = value;
       preferences.putUShort("track_mm", value);
+      encoderConfig.effectiveTrackWidthM = value / 1000.0f;
+      saveEncoderConfig();
       Serial.printf("RECORDED driven-wheel track width=%dmm\n", value);
     } else {
       Serial.println("REJECTED track must be measured millimetres 100..600");
@@ -1668,6 +2683,9 @@ void handleSerialCommand(String command) {
     if (value >= 100 && value <= 60000) {
       calibration.micrometers_per_tick = value;
       preferences.putUShort("tick_um", value);
+      encoderConfig.leftTicksPerMeter =
+          encoderConfig.rightTicksPerMeter = 1000000.0f / value;
+      saveEncoderConfig();
       Serial.printf("RECORDED distance per encoder tick=%d micrometres\n", value);
     } else {
       Serial.println("REJECTED tickum must be measured micrometres 100..60000");
@@ -1766,6 +2784,12 @@ void handleSerialCommand(String command) {
   } else if (command == "cal clear") {
     preferences.clear();
     calibration = Calibration{};
+    portENTER_CRITICAL(&encoderMux);
+    encoderConfig = EncoderConfig{};
+    portEXIT_CRITICAL(&encoderMux);
+    frontGate.setThresholds(encoderConfig.stopDistanceM * 100.0f,
+                            encoderConfig.resumeDistanceM * 100.0f);
+    saveEncoderConfig();
     gyroCalibrationActive = false;
     leftInverted = true;
     rightInverted = true;
@@ -1776,9 +2800,9 @@ void handleSerialCommand(String command) {
     Serial.println("CALIBRATION CLEARED; auto locked");
   } else {
     Serial.println(
-        "Commands: status front stop fwd rev left right");
+        "Commands: status front enc resetenc test <noise|side|straight|turn|status> stop fwd rev left right");
     Serial.println(
-        "Calibration: cal motors <L 0|1> <R 0|1> | cal servo <center> <left|right> | cal width/track/tickum/turn90 | cal imulevel/gyrobias | cal waterdry/waterwet/gasbase/clear");
+        "Calibration: encscale left|right <ticks/metre> | balance config/encoder/gyro | config safety <stop_m> <resume_m> | config show/save/reset | cal motors <L 0|1> <R 0|1> | cal servo <center> <left|right> | cal width/track/tickum/turn90 | cal imulevel/gyrobias | cal waterdry/waterwet/gasbase/clear");
   }
 }
 
@@ -1822,10 +2846,6 @@ void setup() {
       attachMotorPwm(Pin::LEFT_PWM, LEFT_PWM_CHANNEL_V2) &&
       attachMotorPwm(Pin::RIGHT_PWM, RIGHT_PWM_CHANNEL_V2);
   activeBrake(false);
-  attachInterrupt(digitalPinToInterrupt(Pin::LEFT_ENCODER),
-                  onLeftEncoder, RISING);
-  attachInterrupt(digitalPinToInterrupt(Pin::RIGHT_ENCODER),
-                  onRightEncoder, RISING);
   analogReadResolution(12);
   analogSetPinAttenuation(Pin::GAS, ADC_11db);
   analogSetPinAttenuation(Pin::WATER, ADC_11db);
@@ -1839,6 +2859,11 @@ void setup() {
   }
   tofReady = tof.begin(Pin::VL53L0X_ADDRESS, false, &Wire);
   loadCalibration();
+  loadEncoderConfig();
+  attachInterrupt(digitalPinToInterrupt(Pin::LEFT_ENCODER),
+                  onLeftEncoder, FALLING);
+  attachInterrupt(digitalPinToInterrupt(Pin::RIGHT_ENCODER),
+                  onRightEncoder, FALLING);
   servoReady = attachScanServo();
   currentServoDeg = calibration.servo_center_deg
                         ? calibration.servo_center_deg
@@ -1853,6 +2878,7 @@ void setup() {
   sampleFront(true);
   Serial.println(
       "\n=== DEEPTRACK ROVER MISSION / DEFAULT DISARMED ===");
+  Serial.printf("PROTOCOL=%u\n", Protocol::PROTOCOL_VERSION);
   Serial.printf("PWM=%u IMU=%u TOF=%u SERVO=%u RADIO=%u\n",
                 motorPwmReady, imuReady, tofReady, servoReady,
                 radioReady);
@@ -1865,17 +2891,20 @@ void setup() {
 
 void loop() {
   drainCommand();
+  serviceProtocolMismatch();
   drainDiagnostic();
   sampleFront(false);
   serviceAnalogSensors();
   serviceImu();
   serviceDht();
   serviceAuto();
+  serviceManualObstacleScan();
   serviceMotorRamp();
   serviceStallDetection();
   serviceBuzzer();
   serviceDiagnosticOutputs();
   serviceSerial();
+  serviceValidationTest();
   sendTelemetry();
 
   const uint32_t now = millis();

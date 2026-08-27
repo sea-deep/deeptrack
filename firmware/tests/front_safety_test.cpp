@@ -4,10 +4,27 @@
 #include "../shared/DeeptrackFrontSafety.h"
 
 using DeepTrack::Safety::FrontSafetyGate;
+using DeepTrack::Safety::fuseRequiredFrontRanges;
+using DeepTrack::Safety::fuseFailClosedFrontRanges;
 using DeepTrack::Safety::RangeFreshness;
 using DeepTrack::Safety::RangeValidity;
 
 int main() {
+  const auto fused_clear = fuseRequiredFrontRanges(true, 80.0f, true, 650);
+  assert(fused_clear.valid);
+  assert(fused_clear.distance_cm == 65.0f);
+  assert(!fuseRequiredFrontRanges(true, 80.0f, false, 0).valid);
+  assert(!fuseRequiredFrontRanges(false, 0.0f, true, 650).valid);
+  const auto degraded_tof_obstacle = fuseFailClosedFrontRanges(
+      true, 80.0f, true, 180, false, 24.0f);
+  assert(degraded_tof_obstacle.valid);
+  assert(degraded_tof_obstacle.distance_cm == 18.0f);
+  assert(!fuseFailClosedFrontRanges(
+      true, 80.0f, true, 600, false, 24.0f).valid);
+  const auto ultrasonic_only_obstacle = fuseFailClosedFrontRanges(
+      true, 20.0f, false, 0, false, 24.0f);
+  assert(ultrasonic_only_obstacle.valid);
+
   FrontSafetyGate gate(24.0f, 32.0f, 300);
 
   auto initial = gate.snapshot(0);
@@ -58,6 +75,16 @@ int main() {
   wrap_gate.observe(true, 40.0f, UINT32_MAX - 100);
   assert(!wrap_gate.snapshot(50).forward_blocked);
   assert(wrap_gate.snapshot(250).forward_blocked);
+
+  // Measured thresholds are validated and UNKNOWN remains fail-closed.
+  FrontSafetyGate configured_gate(24.0f, 32.0f, 300);
+  assert(!configured_gate.setThresholds(50.0f, 40.0f));
+  assert(configured_gate.snapshot(0).forward_blocked);
+  assert(configured_gate.setThresholds(40.0f, 50.0f));
+  configured_gate.observe(true, 45.0f, 1);
+  assert(configured_gate.snapshot(1).forward_blocked);
+  configured_gate.observe(true, 50.0f, 2);
+  assert(!configured_gate.snapshot(2).forward_blocked);
 
   return 0;
 }

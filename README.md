@@ -18,12 +18,15 @@ estimated-mapping phases. Physical commissioning is still incomplete:
 - the physical build is four TT motors, two TB6612 drivers, one rover ESP32, and one gateway ESP32;
 - `docs/WIRING_GUIDE.md` is the electrical and pin authority;
 - `firmware/shared/DeeptrackHardware.h` is the compiled firmware projection of that pin map;
-- `firmware/shared/DeeptrackProtocol.h` is the compiled versioned rover/gateway packet contract;
+- `firmware/shared/DeeptrackProtocol.h` is the compiled versioned rover/gateway packet contract (currently v2; both ESP32 images must match);
 - `firmware/shared/DeeptrackThresholds.h` is the single authority for unvalidated software starting values;
 - `rover/DeeptrackRover/DeeptrackRover.ino` contains scheduled sensing, active-brake motor control, local collision protection, paired ESP-NOW commands/ACKs, telemetry, and stationary scan/turn/recheck autonomy;
 - `gateway/DeeptrackGateway/DeeptrackGateway.ino` contains the paired ESP-NOW peer, browser-heartbeat watchdog, LCD/LED status, and USB NDJSON bridge;
 - the real dashboard consumes only gateway NDJSON, requires a fresh rover link before arming, uses hold-to-drive, and stops/disarms on focus loss or disconnect;
 - real pose and occupancy evidence stay unknown until measured encoder/chassis calibration is present; the map is dead reckoning, never SLAM;
+- physical commissioning is paused after stationary/manual encoder isolation and preliminary left-forward testing; ticks-per-metre, track width, turn, stopping distance, and reliable odometry remain unset;
+- the laptop layer now contains tested timestamped ray casting, 5 cm occupancy cells, footprint inflation, A* over known-free cells, bounded click-to-Navigate goals, frontier Explore selection, dynamic replanning, and Return Home through the same fail-closed protocol-v2 drive stream;
+- these mission modes are implemented but remain automatically locked while measured odometry or either forward clearance channel is unavailable; they are not physically validated;
 - the existing rover and gateway sketches remain separate bench diagnostics;
 - dashboard demo data is explicitly marked simulated;
 - MQ-4 data remains raw/qualitative, the water probe reports contact evidence only, and mapping is described as estimated rather than SLAM.
@@ -64,7 +67,9 @@ scripts/firmware/    Explicit compile, upload, monitor, and host-test commands
 No radio keys or measured calibration values are committed. Both mission images
 therefore compile but start disarmed and radio-disabled in a clean checkout.
 Follow [`docs/HARDWARE_ACCEPTANCE_CHECKLIST.md`](docs/HARDWARE_ACCEPTANCE_CHECKLIST.md)
-before any floor test.
+before any floor test. The immediate commissioning sequence is
+[`docs/PHYSICAL_ODOMETRY_VALIDATION.md`](docs/PHYSICAL_ODOMETRY_VALIDATION.md);
+mission motion remains calibration-gated until it passes.
 
 ## Reproducible checks
 

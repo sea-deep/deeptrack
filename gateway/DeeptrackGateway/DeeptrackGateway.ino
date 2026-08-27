@@ -237,10 +237,21 @@ void emitTelemetry(const Protocol::TelemetryPacket& packet, int8_t rssi) {
   document["front_valid"] = (flags & Protocol::FRONT_VALID) != 0;
   document["front_fresh"] = (flags & Protocol::FRONT_FRESH) != 0;
   document["front_blocked"] = (flags & Protocol::FRONT_BLOCKED) != 0;
-  if (packet.front_mm == Protocol::UNKNOWN_DISTANCE_MM) document["front_cm"] = nullptr;
-  else document["front_cm"] = packet.front_mm / 10.0f;
-  if (packet.tof_mm == Protocol::UNKNOWN_DISTANCE_MM) document["tof_mm"] = nullptr;
-  else document["tof_mm"] = packet.tof_mm;
+  const bool ultrasonicAvailable =
+      packet.front_mm != Protocol::UNKNOWN_DISTANCE_MM;
+  const bool tofAvailable = packet.tof_mm != Protocol::UNKNOWN_DISTANCE_MM;
+  if (ultrasonicAvailable)
+    document["ultrasonic_cm"] = packet.front_mm / 10.0f;
+  else document["ultrasonic_cm"] = nullptr;
+  if (tofAvailable) document["tof_mm"] = packet.tof_mm;
+  else document["tof_mm"] = nullptr;
+  if ((flags & Protocol::FRONT_VALID) && (flags & Protocol::FRONT_FRESH) &&
+      (ultrasonicAvailable || tofAvailable)) {
+    const uint16_t fusedMm = ultrasonicAvailable && tofAvailable
+        ? min(packet.front_mm, packet.tof_mm)
+        : ultrasonicAvailable ? packet.front_mm : packet.tof_mm;
+    document["front_cm"] = fusedMm / 10.0f;
+  } else document["front_cm"] = nullptr;
   document["gas_raw"] = packet.gas_raw;
   document["gas_pin_mv"] = packet.gas_pin_mv;
   document["gas_state"] = sensorStateName(packet.gas_state);
@@ -271,6 +282,22 @@ void emitTelemetry(const Protocol::TelemetryPacket& packet, int8_t rssi) {
   }
   document["left_ticks"] = packet.left_ticks;
   document["right_ticks"] = packet.right_ticks;
+  document["left_raw_ticks"] = packet.left_raw_ticks;
+  document["right_raw_ticks"] = packet.right_raw_ticks;
+  document["left_rejected_debounce_ticks"] =
+      packet.left_rejected_debounce_ticks;
+  document["right_rejected_debounce_ticks"] =
+      packet.right_rejected_debounce_ticks;
+  document["left_rejected_state_ticks"] = packet.left_rejected_state_ticks;
+  document["right_rejected_state_ticks"] = packet.right_rejected_state_ticks;
+  if (packet.left_micrometers_per_tick)
+    document["left_micrometers_per_tick"] =
+        packet.left_micrometers_per_tick;
+  else document["left_micrometers_per_tick"] = nullptr;
+  if (packet.right_micrometers_per_tick)
+    document["right_micrometers_per_tick"] =
+        packet.right_micrometers_per_tick;
+  else document["right_micrometers_per_tick"] = nullptr;
   document["servo_deg"] = packet.servo_deg;
   document["drive_state"] = driveStateName(packet.drive_state);
   document["status_flags"] = flags;
@@ -290,6 +317,7 @@ void emitScan(const Protocol::ScanPacket& packet) {
   document["source"] = "LIVE";
   document["session"] = packet.header.session_id;
   document["seq"] = packet.header.sequence;
+  document["timestamp_ms"] = packet.header.sender_uptime_ms;
   document["scan_id"] = packet.scan_id;
   document["angle_deg"] = packet.angle_cdeg / 100.0f;
   document["valid"] = packet.valid != 0;
@@ -446,6 +474,20 @@ bool sendDiagnostic(uint8_t action, int16_t argument) {
                       sizeof(packet)) == ESP_OK;
 }
 
+bool sendIncompatibleProtocolProbe(uint8_t version) {
+  if (!radioReady || version == Protocol::PROTOCOL_VERSION) return false;
+  Protocol::PacketHeader probe{};
+  probe.magic = Protocol::PACKET_MAGIC;
+  probe.version = version;
+  probe.type = static_cast<uint8_t>(Protocol::MessageType::COMMAND);
+  probe.session_id = gatewaySession;
+  probe.sequence = ++commandSequence;
+  probe.sender_uptime_ms = millis();
+  return esp_now_send(Radio::ROVER_MAC,
+                      reinterpret_cast<const uint8_t*>(&probe),
+                      sizeof(probe)) == ESP_OK;
+}
+
 void forceStop(const char* reason, bool emit) {
   operatorArmed = false;
   requestedCommand = Protocol::DriveCommand::STOP;
@@ -489,6 +531,24 @@ void handleBrowserLine(const String& line) {
   const char* type = document["type"];
   if (strcmp(type, "stop") == 0) {
     stopMotion();
+    return;
+  }
+  if (strcmp(type, "protocol_probe") == 0) {
+    if (operatorArmed || !document["version"].is<uint8_t>() ||
+        document["version"].as<uint8_t>() == Protocol::PROTOCOL_VERSION) {
+      emitGatewayEvent(
+          "error", "PROTOCOL_PROBE_REJECTED",
+          "Probe requires disarmed gateway and an incompatible version");
+      return;
+    }
+    const uint8_t version = document["version"].as<uint8_t>();
+    if (sendIncompatibleProtocolProbe(version)) {
+      emitGatewayEvent("warning", "PROTOCOL_PROBE_SENT",
+                       "Incompatible header sent; rover must report SAFE_STOP");
+    } else {
+      emitGatewayEvent("error", "PROTOCOL_PROBE_FAILED",
+                       "Incompatible header could not be sent");
+    }
     return;
   }
   if (!sessionAndSequenceValid(document)) {
