@@ -647,18 +647,45 @@
 
   .flowchart-section {
     padding-block: clamp(5rem, 9vw, 8rem);
-    background: var(--md-sys-color-surface);
-    border-top: 1px solid var(--md-sys-color-outline-variant);
+    background: #ffffff;
+  }
+
+  .flowchart-section .section-heading {
+    text-align: center;
+  }
+
+  .flowchart-section .section-heading span {
+    color: #0b6b72;
+    font-size: 0.65rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .flowchart-section .section-heading h2 {
+    color: #001a1c;
+    font-size: clamp(2rem, 4vw, 3.2rem);
+    font-weight: 700;
+    margin-top: 0.5rem;
+    line-height: 1.1;
+  }
+
+  .flowchart-section .section-heading p {
+    color: #556667;
+    margin-top: 1rem;
+    font-size: 0.9rem;
+    max-width: 36rem;
+    margin-inline: auto;
   }
 
   .flowchart-container {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 1rem;
-    max-width: 72rem;
-    margin: 3rem auto 0;
-    padding-inline: max(1rem, calc((100% - 80rem) / 2));
+    gap: 1.5rem;
+    max-width: 64rem;
+    margin: 3.5rem auto 0;
+    padding-inline: 1.5rem;
   }
 
   .flow-step {
@@ -667,40 +694,46 @@
     flex-direction: column;
     align-items: center;
     text-align: center;
-    padding: 2rem 1.5rem;
-    background: var(--md-sys-color-surface-container-lowest);
-    border: 1px solid var(--md-sys-color-outline-variant);
-    border-radius: 1.5rem;
-    box-shadow: 0 4px 12px rgb(0 0 0 / 0.05);
+    padding: 2.2rem 1.2rem;
+    background: #ffffff;
+    border: 1px solid #e1e7e8;
+    border-radius: 1rem;
+    box-shadow: 0 8px 24px rgb(0 26 28 / 0.04);
+    min-height: 16rem;
   }
 
   .step-icon {
     display: grid;
-    width: 3.5rem;
-    height: 3.5rem;
+    width: 3.8rem;
+    height: 3.8rem;
     place-items: center;
     border-radius: 1rem;
-    background: var(--md-sys-color-primary-container);
-    color: var(--md-sys-color-on-primary-container);
-    margin-bottom: 1.25rem;
+    background: #a5f0ff;
+    color: #001a1c;
+    margin-bottom: 1.5rem;
+  }
+  
+  .step-icon .material-symbols-rounded {
+    font-size: 1.6rem;
   }
 
   .flow-step h4 {
-    font-size: 1.05rem;
-    font-weight: 650;
-    color: var(--md-sys-color-on-surface);
+    font-size: 1rem;
+    font-weight: 700;
+    color: #001a1c;
+    margin-bottom: 0.75rem;
   }
 
   .flow-step p {
-    margin-top: 0.75rem;
-    font-size: 0.85rem;
-    color: var(--md-sys-color-on-surface-variant);
-    line-height: 1.5;
+    font-size: 0.8rem;
+    color: #556667;
+    line-height: 1.6;
+    margin: 0;
   }
 
   .flow-arrow {
-    color: var(--md-sys-color-outline);
-    font-size: 1.5rem;
+    color: #8c9b9d;
+    font-size: 1.2rem;
     flex-shrink: 0;
   }
 
