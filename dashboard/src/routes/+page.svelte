@@ -25,6 +25,7 @@
     { image: '/images/components/hypersonic.png?v=3', name: 'HC-SR04 sonar', tag: 'Distance', copy: 'Checks the space directly ahead and helps stop the rover before it reaches an obstacle.' },
     { image: '/images/components/encoder.png?v=3', name: 'Optical encoder', tag: 'Motion', copy: 'Measures wheel rotation to estimate speed and distance traveled.' },
     { image: '/images/components/mpu.png?v=3', name: 'MPU6050 IMU', tag: 'Tilt', copy: 'Adds tilt and movement context when the rover travels over uneven ground.' },
+    { image: '/images/components/bme280.png?v=4', name: 'BME280 sensor', tag: 'Pressure', copy: 'Measures barometric pressure to estimate relative depth and altitude changes.' },
     { image: '/images/components/chasis.png?v=3', name: '4WD drive system', tag: 'Drive', copy: 'Four geared motors and two motor drivers provide simple skid-steer movement.' }
   ];
 
