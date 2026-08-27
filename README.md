@@ -5,7 +5,7 @@
 
 **Live Homepage:** [https://deeptrack.up.railway.app](https://deeptrack.up.railway.app)
 
-DEEPTRACK is a four-wheel, dual-ESP32 laboratory rover prototype built for offline reconnaissance experiments.
+DEEPTRACK is a four-wheel and dual-ESP32 laboratory rover prototype built for offline reconnaissance experiments.
 
 > An offline, hazard-aware reconnaissance rover with local collision protection, explainable obstacle avoidance, estimated route mapping, and a live operator dashboard.
 
