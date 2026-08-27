@@ -19,13 +19,13 @@
   ];
 
   const hardware = [
-    { image: '/images/components/esp32.png?v=2', name: 'ESP32 controller', tag: 'Control', copy: 'Reads the sensors, runs the rover logic and sends updates to the gateway.' },
-    { image: '/images/components/mq4.png?v=2', name: 'MQ-4 gas sensor', tag: 'Air', copy: 'Reports raw methane-sensitive activity. It is useful for trends, not certified safety readings.' },
-    { image: '/images/components/dht.png?v=2', name: 'DHT22 sensor', tag: 'Climate', copy: 'Measures the temperature and relative humidity around the rover.' },
-    { image: '/images/components/hypersonic.png?v=2', name: 'HC-SR04 sonar', tag: 'Distance', copy: 'Checks the space directly ahead and helps stop the rover before it reaches an obstacle.' },
-    { image: '/images/components/encoder.png?v=2', name: 'Optical encoder', tag: 'Motion', copy: 'Measures wheel rotation to estimate speed and distance traveled.' },
-    { image: '/images/components/mpu.png?v=2', name: 'MPU6050 IMU', tag: 'Tilt', copy: 'Adds tilt and movement context when the rover travels over uneven ground.' },
-    { image: '/images/components/chasis.png?v=2', name: '4WD drive system', tag: 'Drive', copy: 'Four geared motors and two motor drivers provide simple skid-steer movement.' }
+    { image: '/images/components/esp32.png?v=3', name: 'ESP32 controller', tag: 'Control', copy: 'Reads the sensors, runs the rover logic and sends updates to the gateway.' },
+    { image: '/images/components/mq4.png?v=3', name: 'MQ-4 gas sensor', tag: 'Air', copy: 'Reports raw methane-sensitive activity. It is useful for trends, not certified safety readings.' },
+    { image: '/images/components/dht.png?v=3', name: 'DHT22 sensor', tag: 'Climate', copy: 'Measures the temperature and relative humidity around the rover.' },
+    { image: '/images/components/hypersonic.png?v=3', name: 'HC-SR04 sonar', tag: 'Distance', copy: 'Checks the space directly ahead and helps stop the rover before it reaches an obstacle.' },
+    { image: '/images/components/encoder.png?v=3', name: 'Optical encoder', tag: 'Motion', copy: 'Measures wheel rotation to estimate speed and distance traveled.' },
+    { image: '/images/components/mpu.png?v=3', name: 'MPU6050 IMU', tag: 'Tilt', copy: 'Adds tilt and movement context when the rover travels over uneven ground.' },
+    { image: '/images/components/chasis.png?v=3', name: '4WD drive system', tag: 'Drive', copy: 'Four geared motors and two motor drivers provide simple skid-steer movement.' }
   ];
 
   let activeView = $state(0);
