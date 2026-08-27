@@ -734,6 +734,7 @@
     padding: 0.5rem;
     border-radius: 50%;
     font-size: 1.5rem;
+    box-sizing: content-box;
   }
   
   .track-link small {
