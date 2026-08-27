@@ -25,7 +25,7 @@
     { image: '/images/components/hypersonic.png?v=3', name: 'HC-SR04 sonar', tag: 'Distance', copy: 'Checks the space directly ahead and helps stop the rover before it reaches an obstacle.' },
     { image: '/images/components/encoder.png?v=3', name: 'Optical encoder', tag: 'Motion', copy: 'Measures wheel rotation to estimate speed and distance traveled.' },
     { image: '/images/components/mpu.png?v=3', name: 'MPU6050 IMU', tag: 'Tilt', copy: 'Adds tilt and movement context when the rover travels over uneven ground.' },
-    { image: '/images/components/bme280.png?v=4', name: 'BME280 sensor', tag: 'Pressure', copy: 'Measures barometric pressure to estimate relative depth and altitude changes.' },
+    { image: '/images/components/vl53l0x.png?v=5', name: 'VL53L0X ToF', tag: 'Distance', copy: 'High-precision Time-of-Flight laser sensor for millimeter-accurate obstacle detection.' },
     { image: '/images/components/chasis.png?v=3', name: '4WD drive system', tag: 'Drive', copy: 'Four geared motors and two motor drivers provide simple skid-steer movement.' }
   ];
 
@@ -176,7 +176,40 @@
         {/each}
       </div>
 
+    </section>
 
+    <section class="flowchart-section">
+      <div class="section-heading">
+        <span>How it works</span>
+        <h2>Time-of-Flight (ToF) Sensing</h2>
+        <p>The VL53L0X sensor provides millimeter-accurate distance readings by measuring how long it takes for light to bounce back from an obstacle.</p>
+      </div>
+
+      <div class="flowchart-container">
+        <div class="flow-step">
+          <div class="step-icon"><span class="material-symbols-rounded">sensors</span></div>
+          <h4>1. Pulse Emission</h4>
+          <p>The sensor emits a 940nm invisible laser pulse towards the target.</p>
+        </div>
+        <div class="flow-arrow"><span class="material-symbols-rounded">arrow_forward</span></div>
+        <div class="flow-step">
+          <div class="step-icon"><span class="material-symbols-rounded">sports_tennis</span></div>
+          <h4>2. Reflection</h4>
+          <p>The photons hit the obstacle and bounce back towards the rover.</p>
+        </div>
+        <div class="flow-arrow"><span class="material-symbols-rounded">arrow_forward</span></div>
+        <div class="flow-step">
+          <div class="step-icon"><span class="material-symbols-rounded">timer</span></div>
+          <h4>3. Time Measurement</h4>
+          <p>An avalanche photodiode measures the exact time of flight.</p>
+        </div>
+        <div class="flow-arrow"><span class="material-symbols-rounded">arrow_forward</span></div>
+        <div class="flow-step">
+          <div class="step-icon"><span class="material-symbols-rounded">memory</span></div>
+          <h4>4. CPU Processing</h4>
+          <p>The ESP32 reads the distance via I2C and halts motors if too close.</p>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -609,6 +642,75 @@
 
     @keyframes enter-visual {
       from { opacity: 0; transform: translateY(1.5rem) scale(0.98); }
+    }
+  }
+
+  .flowchart-section {
+    padding-block: clamp(5rem, 9vw, 8rem);
+    background: var(--md-sys-color-surface);
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .flowchart-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    max-width: 72rem;
+    margin: 3rem auto 0;
+    padding-inline: max(1rem, calc((100% - 80rem) / 2));
+  }
+
+  .flow-step {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 2rem 1.5rem;
+    background: var(--md-sys-color-surface-container-lowest);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 1.5rem;
+    box-shadow: 0 4px 12px rgb(0 0 0 / 0.05);
+  }
+
+  .step-icon {
+    display: grid;
+    width: 3.5rem;
+    height: 3.5rem;
+    place-items: center;
+    border-radius: 1rem;
+    background: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+    margin-bottom: 1.25rem;
+  }
+
+  .flow-step h4 {
+    font-size: 1.05rem;
+    font-weight: 650;
+    color: var(--md-sys-color-on-surface);
+  }
+
+  .flow-step p {
+    margin-top: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--md-sys-color-on-surface-variant);
+    line-height: 1.5;
+  }
+
+  .flow-arrow {
+    color: var(--md-sys-color-outline);
+    font-size: 1.5rem;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 900px) {
+    .flowchart-container {
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .flow-arrow {
+      transform: rotate(90deg);
     }
   }
 </style>
