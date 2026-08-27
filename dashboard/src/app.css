@@ -1,12 +1,20 @@
-@import url('https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400;500;600;700;800&family=Google+Sans+Code:wght@400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Material Symbols Rounded';
+  src: url('/fonts/material-symbols-rounded-subset.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
 :root {
-  --font-ui: 'Google Sans Flex', system-ui, -apple-system, sans-serif;
-  --font-mono: 'Google Sans Code', ui-monospace, monospace;
+  --font-ui: 'Google Sans', 'Product Sans', Roboto, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', ui-monospace,
+    monospace;
 
   /* Material 3 Light Theme Baseline */
   --md-sys-color-primary: #006874;
@@ -120,6 +128,27 @@ body {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+}
+
+.material-symbols-rounded {
+  display: inline-block;
+  overflow: hidden;
+  width: 1em;
+  height: 1em;
+  font-family: 'Material Symbols Rounded';
+  font-size: 24px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: normal;
+  text-align: center;
+  text-transform: none;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: 'liga';
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Base button and interactive reset */

@@ -1,401 +1,612 @@
 <script>
   import Navbar from '$lib/components/Navbar.svelte';
   import Footer from '$lib/components/Footer.svelte';
-  import RoverLogo from '$lib/components/RoverLogo.svelte';
-  import { initialScanPoints } from '$lib/mocks/telemetryMock.js';
-  import { getTheme } from '$lib/utils/theme.js';
   import { onMount } from 'svelte';
+  import { fade } from 'svelte/transition';
 
-  // Explicitly simulated hero preview; no values on this page are measurements.
-  let servoAngle = $state(90);
-  let servoDir = $state(4);
-  let currentScanMm = $state(1240);
-  let liveGasRaw = $state(820); // uncalibrated demo ADC
-  let liveTemp = $state(29.1); // °C
-  let isDarkMode = $state(true);
+  const roverViews = [
+    { src: '/images/rover/rover-front-left.png', angle: 'Front left', note: 'Sensor mast and front obstacle sensors' },
+    { src: '/images/rover/rover-front-right.png', angle: 'Front right', note: 'Drive electronics and four-wheel chassis' },
+    { src: '/images/rover/rover-rear.png', angle: 'Rear view', note: 'Power, motor drivers and protected wiring' },
+    { src: '/images/rover/rover-top.png', angle: 'Top view', note: 'Controller and environmental sensors' }
+  ];
 
-  /** @type {HTMLCanvasElement | undefined} */
-  let radarCanvas = $state();
-  let scanPoints = $state([...initialScanPoints]);
+  const features = [
+    { icon: 'air', eyebrow: 'Gas sensing', title: 'Methane activity', copy: 'The MQ-4 watches for changes in nearby gas levels and sends the raw reading to the dashboard.' },
+    { icon: 'device_thermostat', eyebrow: 'Environment', title: 'Temperature & humidity', copy: 'A DHT22 keeps track of heat and moisture so the operator has more context about the route.' },
+    { icon: 'route', eyebrow: 'Movement', title: 'Assisted self-drive', copy: 'Distance sensors help the rover spot obstacles, choose open space and stop before a collision.' },
+    { icon: 'wifi_off', eyebrow: 'Connection', title: 'Works offline', copy: 'The rover and gateway talk directly over ESP-NOW. The core controls do not need internet access.' }
+  ];
 
-  function updateThemeState() {
-    isDarkMode = getTheme() === 'dark';
+  const hardware = [
+    { image: '/images/components/esp32.png', name: 'ESP32 controller', tag: 'Control', copy: 'Reads the sensors, runs the rover logic and sends updates to the gateway.' },
+    { image: '/images/components/mq4.png', name: 'MQ-4 gas sensor', tag: 'Air', copy: 'Reports raw methane-sensitive activity. It is useful for trends, not certified safety readings.' },
+    { image: '/images/components/dht.png', name: 'DHT22 sensor', tag: 'Climate', copy: 'Measures the temperature and relative humidity around the rover.' },
+    { image: '/images/components/hypersonic.png', name: 'HC-SR04 sonar', tag: 'Distance', copy: 'Checks the space directly ahead and helps stop the rover before it reaches an obstacle.' },
+    { image: '/images/components/encoder.png', name: 'MPU6050 IMU', tag: 'Motion', copy: 'Adds tilt and movement context when the rover travels over uneven ground.' },
+    { image: '/images/components/chasis.png', name: '4WD drive system', tag: 'Drive', copy: 'Four geared motors and two motor drivers provide simple skid-steer movement.' }
+  ];
+
+  let activeView = $state(0);
+
+  function showNextView() {
+    activeView = (activeView + 1) % roverViews.length;
   }
 
-  function drawPolarRadar() {
-    if (!radarCanvas) return;
-    const ctx = radarCanvas.getContext('2d');
-    if (!ctx) return;
+  /** @param {number} index */
+  function showView(index) {
+    activeView = index;
+  }
 
-    const w = radarCanvas.width;
-    const h = radarCanvas.height;
-    const cx = w / 2;
-    const cy = h - 25;
-    const maxRadius = Math.min(cx - 20, cy - 20);
+  /** @param {KeyboardEvent} event */
+  function handleCarouselKeydown(event) {
+    if (event.key === 'ArrowRight' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      showNextView();
+    }
 
-    ctx.clearRect(0, 0, w, h);
-
-    // Theme-Aware Colors
-    const arcStroke = isDarkMode ? 'rgba(141, 145, 153, 0.22)' : 'rgba(100, 116, 139, 0.3)';
-    const textFill = isDarkMode ? 'rgba(141, 145, 153, 0.8)' : 'rgba(71, 85, 105, 0.9)';
-    const hitColor = isDarkMode ? '#59dbc7' : '#0284c7';
-    const hitCloseColor = isDarkMode ? '#ffb4ab' : '#dc2626';
-    const laserStroke = isDarkMode ? '#59dbc7' : '#0284c7';
-
-    // Draw Polar Range Arcs (0.5m, 1.0m, 1.5m, 2.0m)
-    ctx.strokeStyle = arcStroke;
-    ctx.lineWidth = 1;
-    [0.25, 0.5, 0.75, 1.0].forEach((ratio) => {
-      const r = maxRadius * ratio;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, Math.PI, 0, false);
-      ctx.stroke();
-
-      // Range label
-      ctx.fillStyle = textFill;
-      ctx.font = '10px "Google Sans Code", monospace';
-      ctx.fillText(`${(ratio * 2.0).toFixed(1)}m`, cx + r - 25, cy - 4);
-    });
-
-    // Draw Radial Angle Lines (30°, 60°, 90°, 120°, 150°)
-    [30, 60, 90, 120, 150].forEach(deg => {
-      const rad = (180 - deg) * (Math.PI / 180);
-      const x = cx + Math.cos(rad) * maxRadius;
-      const y = cy - Math.sin(rad) * maxRadius;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-
-      ctx.fillStyle = textFill;
-      ctx.font = '10px "Google Sans Code", monospace';
-      ctx.fillText(`${deg}°`, x + (deg < 90 ? 4 : -24), y - 4);
-    });
-
-    // Draw Point Cloud from VL53L0X Sweep
-    scanPoints.forEach(p => {
-      if (!p.valid) return;
-      const rad = (180 - p.angle_deg) * (Math.PI / 180);
-      const r = (Math.min(2000, p.distance_mm) / 2000) * maxRadius;
-      const px = cx + Math.cos(rad) * r;
-      const py = cy - Math.sin(rad) * r;
-
-      ctx.beginPath();
-      ctx.arc(px, py, 4, 0, Math.PI * 2);
-      ctx.fillStyle = p.distance_mm < 500 ? hitCloseColor : hitColor;
-      ctx.fill();
-    });
-
-    // Draw Current Servo Laser Beam with Glow
-    const beamRad = (180 - servoAngle) * (Math.PI / 180);
-    const beamLen = (Math.min(2000, currentScanMm) / 2000) * maxRadius;
-    const bx = cx + Math.cos(beamRad) * beamLen;
-    const by = cy - Math.sin(beamRad) * beamLen;
-
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(bx, by);
-    ctx.strokeStyle = laserStroke;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Rover Pivot Indicator at Center
-    ctx.beginPath();
-    ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-    ctx.fillStyle = hitColor;
-    ctx.fill();
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      activeView = (activeView - 1 + roverViews.length) % roverViews.length;
+    }
   }
 
   onMount(() => {
-    updateThemeState();
-    const handleThemeChange = () => {
-      updateThemeState();
-      drawPolarRadar();
-    };
-    window.addEventListener('ui:themechange', handleThemeChange);
-
-    if (radarCanvas) {
-      const rect = radarCanvas.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      radarCanvas.width = rect.width * dpr;
-      radarCanvas.height = rect.height * dpr;
-      const ctx = radarCanvas.getContext('2d');
-      if (ctx) ctx.scale(dpr, dpr);
-      drawPolarRadar();
-    }
-
-    const interval = setInterval(() => {
-      servoAngle += servoDir;
-      if (servoAngle >= 150) {
-        servoAngle = 150;
-        servoDir = -4;
-      } else if (servoAngle <= 30) {
-        servoAngle = 30;
-        servoDir = 4;
-      }
-
-      const wallDist = 700 + Math.sin(servoAngle * (Math.PI / 180)) * 900 + (Math.random() - 0.5) * 35;
-      currentScanMm = Math.round(wallDist);
-
-      scanPoints = scanPoints.map(p => 
-        Math.abs(p.angle_deg - servoAngle) < 4 ? { angle_deg: servoAngle, distance_mm: currentScanMm, valid: true } : p
-      );
-
-      liveGasRaw = +(820 + Math.sin(Date.now() / 4000) * 40).toFixed(0);
-      liveTemp = +(28.8 + Math.cos(Date.now() / 6000) * 1.2).toFixed(1);
-
-      drawPolarRadar();
-    }, 100);
-
-    return () => {
-      window.removeEventListener('ui:themechange', handleThemeChange);
-      clearInterval(interval);
-    };
+    const interval = window.setInterval(showNextView, 4200);
+    return () => window.clearInterval(interval);
   });
 </script>
 
 <svelte:head>
-  <title>DeepTrack</title>
+  <title>DeepTrack — Mine rescue rover prototype</title>
+  <meta name="description" content="DeepTrack is a v0 mine rescue rover prototype for offline sensing, assisted driving and operator control." />
 </svelte:head>
 
-<div class="min-h-screen flex flex-col bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)] select-none">
+<div class="min-h-screen flex flex-col bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)]">
   <Navbar active="home" />
 
-  <main class="flex-1">
-    <!-- Hero Section with Expressive Entrance Animation -->
-    <section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 lg:py-20 grid grid-cols-1 lg:grid-cols-12 gap-12 items-center" aria-labelledby="hero-title">
-      
-      <!-- Left 7 cols: Direct Headline & Actions -->
-      <div class="lg:col-span-7 flex flex-col items-start hero-text-layer">
-        <h1 id="hero-title" class="tracking-tight text-3xl sm:text-5xl lg:text-6xl font-bold leading-tight text-[var(--md-sys-color-on-surface)]">
-          DeepTrack Mine Rescue Rover
-        </h1>
+  <main class="flex-1 overflow-hidden">
+    <section class="landing-hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
 
-        <p class="text-base sm:text-lg text-[var(--md-sys-color-on-surface-variant)] leading-relaxed mt-5 max-w-2xl">
-          A four-wheel hackathon robot with obstacle sensing, environmental readings, direct ESP-NOW communication, and a live web dashboard. This prototype is not certified for real mine or rescue use.
-        </p>
 
-        <div class="flex flex-wrap items-center gap-3.5 mt-8">
-          <a href="/dashboard" class="ui-button ui-button--filled !h-12 !px-6 text-sm font-medium shadow-md hover:shadow-lg transition-all duration-300 active:scale-95">
+        <h1 id="hero-title">A prototype model for a mine rescue rover.</h1>
+
+        <p>DeepTrack is a small four-wheel rover built to explore hard-to-reach spaces, watch its surroundings and send useful readings back to an operator.</p>
+
+        <div class="hero-actions">
+          <a href="/dashboard" class="ui-button ui-button--filled !h-12 !px-6 text-sm font-medium shadow-md hover:shadow-lg">
             <span class="material-symbols-rounded text-xl">terminal</span>
             Open dashboard
           </a>
-          <a href="#hardware" class="ui-button ui-button--outlined !h-12 !px-6 text-sm font-medium transition-all duration-300 active:scale-95">
+          <a href="#hardware" class="ui-button ui-button--outlined !h-12 !px-6 text-sm font-medium">
             <span class="material-symbols-rounded text-xl">developer_board</span>
             See hardware
           </a>
         </div>
-
-        <!-- 4-Column Technical Metrics Strip with Staggered Entrance -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-12 pt-8 border-t border-[var(--md-sys-color-outline-variant)] w-full hero-metrics-layer">
-          <div class="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/50">
-            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">4WD</div>
-            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">Four TT motors</div>
-          </div>
-          <div class="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/50">
-            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">2×</div>
-            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">TB6612 drivers</div>
-          </div>
-          <div class="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/50">
-            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">2×</div>
-            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">ESP32 boards</div>
-          </div>
-          <div class="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/50">
-            <div class="text-xl font-semibold telemetry text-[var(--ui-brand-cyan)]">Offline</div>
-            <div class="text-xs text-[var(--md-sys-color-on-surface-variant)] mt-0.5">Core rover link</div>
-          </div>
-        </div>
       </div>
 
-      <!-- Right 5 cols: explicit simulated single-point ToF preview -->
-      <div class="lg:col-span-5 ui-card !p-5 flex flex-col justify-between shadow-xl bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] m3-card-interactive hero-radar-layer">
-        <!-- Visualizer Header -->
-        <div class="flex items-center justify-between border-b border-[var(--md-sys-color-outline-variant)] pb-3">
-          <div class="flex items-center gap-2">
-            <RoverLogo size={20} />
-            <div class="section-title text-[var(--md-sys-color-on-surface)]">
-              Simulated VL53L0X servo scan
+      <div class="rover-showcase hero-visual" aria-label="Rover image carousel">
+        <button
+          type="button"
+          class="rover-stage"
+          onclick={showNextView}
+          onkeydown={handleCarouselKeydown}
+          aria-label={`Show next rover view. Current view: ${roverViews[activeView].angle}`}
+        >
+          <div class="stage-grid"></div>
+          {#key activeView}
+            <img
+              src={roverViews[activeView].src}
+              alt={`DeepTrack rover — ${roverViews[activeView].angle}`}
+              in:fade={{ duration: 480 }}
+              out:fade={{ duration: 220 }}
+            />
+          {/key}
+
+          <div class="view-caption">
+            <span>{String(activeView + 1).padStart(2, '0')} / 04</span>
+            <div>
+              <strong>{roverViews[activeView].angle}</strong>
+              <small>{roverViews[activeView].note}</small>
             </div>
           </div>
-          <div class="telemetry text-xs text-[var(--ui-brand-cyan)]">
-            Servo: {servoAngle}° • Range: {currentScanMm} mm
-          </div>
+
+          <span class="next-view">
+            Next view
+            <span class="material-symbols-rounded">arrow_forward</span>
+          </span>
+        </button>
+
+        <div class="carousel-dots" aria-label="Choose a rover view">
+          {#each roverViews as view, index}
+            <button
+              type="button"
+              class:active={activeView === index}
+              onclick={() => showView(index)}
+              aria-label={`Show ${view.angle}`}
+              aria-current={activeView === index ? 'true' : undefined}
+            ></button>
+          {/each}
         </div>
 
-        <!-- Polar Canvas -->
-        <div class="my-3 relative w-full h-[240px] bg-[var(--md-sys-color-surface-container-lowest)] rounded-xl border border-[var(--md-sys-color-outline-variant)] flex items-center justify-center overflow-hidden">
-          <canvas bind:this={radarCanvas} class="w-full h-full block"></canvas>
-        </div>
-
-        <!-- Telemetry Ticker -->
-        <div class="grid grid-cols-2 gap-3 pt-2 text-xs">
-          <div class="p-2.5 rounded-lg bg-[var(--md-sys-color-surface-container-highest)] border border-[var(--md-sys-color-outline-variant)]">
-            <div class="metric-label text-[10px] text-[var(--md-sys-color-on-surface-variant)]">MQ-4 demo signal</div>
-            <div class="font-semibold text-sm text-[var(--ui-brand-cyan)] telemetry mt-0.5">
-              {liveGasRaw} ADC <span class="text-xs font-normal text-[var(--md-sys-color-on-surface-variant)]">(simulated, uncalibrated)</span>
-            </div>
-          </div>
-          <div class="p-2.5 rounded-lg bg-[var(--md-sys-color-surface-container-highest)] border border-[var(--md-sys-color-outline-variant)]">
-            <div class="metric-label text-[10px] text-[var(--md-sys-color-on-surface-variant)]">Demo climate</div>
-            <div class="font-semibold text-sm text-[var(--ui-brand-cyan)] telemetry mt-0.5">
-              {liveTemp}°C <span class="text-xs font-normal text-[var(--md-sys-color-on-surface-variant)]">(RH: 68%)</span>
-            </div>
-          </div>
-        </div>
       </div>
-
     </section>
 
-    <!-- Hardware Architecture Section (#hardware) -->
-    <section id="hardware" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 border-t border-[var(--md-sys-color-outline-variant)] hardware-section relative z-10">
-      <div class="text-center max-w-3xl mx-auto mb-12">
-        <h2 class="text-2xl sm:text-3xl font-bold text-[var(--md-sys-color-on-surface)]">
-          Robot hardware
-        </h2>
-        <p class="text-[var(--md-sys-color-on-surface-variant)] text-sm sm:text-base mt-2">
-          Bench-tested prototype parts for the hackathon rover. This assembly is not intrinsically safe or mine approved.
-        </p>
+    <section class="feature-section" aria-labelledby="features-title">
+      <div class="section-heading section-heading--left">
+        <span>What it can do</span>
+        <h2 id="features-title">Useful tools for a first prototype.</h2>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <!-- Card 1: MQ-4 -->
-        <div class="ui-card flex flex-col justify-between !p-5 m3-card-interactive">
-          <div>
-            <div class="w-10 h-10 rounded-xl bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] flex items-center justify-center mb-4">
-              <span class="material-symbols-rounded text-xl filled text-[var(--ui-brand-cyan)]">air</span>
-            </div>
-            <h3 class="text-base font-semibold text-[var(--md-sys-color-on-surface)] mb-1.5">
-              MQ-4 Qualitative Gas Activity
-            </h3>
-            <p class="text-xs text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">
-              Raw ADC sampling through a 10 kΩ / 15 kΩ divider on GPIO36. Warm-up, baseline, trend, persistence, and confidence are required before qualitative interpretation.
-            </p>
-          </div>
-          <div class="mt-4 pt-3 border-t border-[var(--md-sys-color-outline-variant)] text-xs telemetry text-[var(--md-sys-color-on-surface-variant)]">
-            No calibrated ppm, %LEL, or safe-air claim
-          </div>
-        </div>
-
-        <!-- Card 2: software-ready approximate route map -->
-        <div class="ui-card flex flex-col justify-between !p-5 m3-card-interactive">
-          <div>
-            <div class="w-10 h-10 rounded-xl bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] flex items-center justify-center mb-4">
-              <span class="material-symbols-rounded text-xl filled text-[var(--ui-brand-cyan)]">explore</span>
-            </div>
-            <h3 class="text-base font-semibold text-[var(--md-sys-color-on-surface)] mb-1.5">
-              Approximate Route Mapping · Calibration Required
-            </h3>
-            <p class="text-xs text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">
-              Calibrated encoder dead reckoning and sparse ToF occupancy evidence visualize an estimated route. Without measured geometry the pose stays unknown; this is not SLAM.
-            </p>
-          </div>
-          <div class="mt-4 pt-3 border-t border-[var(--md-sys-color-outline-variant)] text-xs telemetry text-[var(--md-sys-color-on-surface-variant)]">
-            Software implemented · physical validation pending
-          </div>
-        </div>
-
-        <!-- Card 3: Incline & IMU -->
-        <div class="ui-card flex flex-col justify-between !p-5 m3-card-interactive">
-          <div>
-            <div class="w-10 h-10 rounded-xl bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] flex items-center justify-center mb-4">
-              <span class="material-symbols-rounded text-xl filled text-[var(--ui-brand-cyan)]">screen_rotation</span>
-            </div>
-            <h3 class="text-base font-semibold text-[var(--md-sys-color-on-surface)] mb-1.5">
-              IMU Tilt Context
-            </h3>
-            <p class="text-xs text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">
-              MPU6050 acceleration and gyro readings support relative tilt context and future pose-confidence checks. It provides no absolute heading and is not a certified rollover detector.
-            </p>
-          </div>
-          <div class="mt-4 pt-3 border-t border-[var(--md-sys-color-outline-variant)] text-xs telemetry text-[var(--md-sys-color-on-surface-variant)]">
-            Bench-calibrated limits only
-          </div>
-        </div>
+      <div class="feature-grid">
+        {#each features as feature, index}
+          <article class="feature-card">
+            <div class="feature-number">0{index + 1}</div>
+            <span class="material-symbols-rounded feature-icon">{feature.icon}</span>
+            <p class="card-eyebrow">{feature.eyebrow}</p>
+            <h3>{feature.title}</h3>
+            <p class="card-copy">{feature.copy}</p>
+          </article>
+        {/each}
       </div>
+    </section>
+
+    <section id="hardware" class="hardware-section" aria-labelledby="hardware-title">
+      <div class="section-heading">
+        <span>Hardware</span>
+        <h2 id="hardware-title">The main parts and what they add.</h2>
+        <p>Real hobby components, chosen to make the rover easy to build, test and repair.</p>
+      </div>
+
+      <div class="hardware-grid">
+        {#each hardware as part}
+          <article class="hardware-card">
+            <div class="component-image">
+              <img src={part.image} alt={part.name} loading="lazy" />
+              <span>{part.tag}</span>
+            </div>
+            <div class="component-copy">
+              <h3>{part.name}</h3>
+              <p>{part.copy}</p>
+            </div>
+          </article>
+        {/each}
+      </div>
+
+
     </section>
   </main>
 
   <Footer />
 </div>
 
-
 <style>
-  /* --- PAGE LOAD CHOREOGRAPHY --- */
-  
+  .landing-hero,
+  .feature-section,
+  .hardware-section {
+    width: min(100% - 2rem, 80rem);
+    margin-inline: auto;
+  }
+
+  .landing-hero {
+    min-height: calc(100vh - 4rem);
+    display: grid;
+    grid-template-columns: minmax(0, 0.88fr) minmax(28rem, 1.12fr);
+    align-items: center;
+    gap: clamp(3rem, 6vw, 6.5rem);
+    padding-block: clamp(4rem, 8vw, 7rem);
+  }
+
+  .prototype-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    color: var(--md-sys-color-on-surface-variant);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .prototype-dot {
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: var(--md-sys-color-primary);
+    box-shadow: 0 0 0 0.35rem color-mix(in srgb, var(--md-sys-color-primary) 16%, transparent);
+  }
+
+  h1 {
+    max-width: 12ch;
+    margin-top: 1.5rem;
+    font-size: clamp(2.9rem, 6vw, 5.8rem);
+    font-weight: 650;
+    letter-spacing: -0.055em;
+    line-height: 0.98;
+  }
+
+  .hero-copy > p {
+    max-width: 38rem;
+    margin-top: 1.75rem;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: clamp(1rem, 1.5vw, 1.18rem);
+    line-height: 1.7;
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.85rem;
+    margin-top: 2.25rem;
+  }
+
+  .rover-showcase { min-width: 0; }
+
+  .rover-stage {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 0.88;
+    overflow: hidden;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 2rem;
+    background: radial-gradient(circle at 60% 34%, color-mix(in srgb, var(--md-sys-color-primary) 15%, transparent), transparent 42%), var(--md-sys-color-surface-container-low);
+    color: var(--md-sys-color-on-surface);
+    cursor: pointer;
+    isolation: isolate;
+    box-shadow: 0 2rem 5rem color-mix(in srgb, var(--md-sys-color-on-surface) 10%, transparent);
+  }
+
+  .rover-stage:focus-visible {
+    outline: 3px solid var(--md-sys-color-primary);
+    outline-offset: 4px;
+  }
+
+  .stage-grid {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    opacity: 0.28;
+    background-image: linear-gradient(var(--md-sys-color-outline-variant) 1px, transparent 1px), linear-gradient(90deg, var(--md-sys-color-outline-variant) 1px, transparent 1px);
+    background-size: 2.5rem 2.5rem;
+    mask-image: linear-gradient(to bottom, black, transparent 78%);
+  }
+
+  .rover-stage img {
+    position: absolute;
+    inset: 5% 2% 14%;
+    width: 96%;
+    height: 81%;
+    object-fit: contain;
+    filter: drop-shadow(0 1.6rem 1.5rem rgb(0 0 0 / 0.25));
+    transition: transform 500ms ease;
+  }
+
+  .rover-stage:hover img { transform: scale(1.025) translateY(-0.2rem); }
+
+  .view-caption {
+    position: absolute;
+    right: 1.5rem;
+    bottom: 1.35rem;
+    left: 1.5rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+    text-align: left;
+  }
+
+  .view-caption > span {
+    color: var(--md-sys-color-primary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+
+  .view-caption strong,
+  .view-caption small { display: block; }
+
+  .view-caption strong { font-size: 0.9rem; }
+
+  .view-caption small {
+    margin-top: 0.15rem;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 0.72rem;
+  }
+
+  .next-view {
+    position: absolute;
+    top: 1.35rem;
+    right: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--md-sys-color-surface-container-lowest) 82%, transparent);
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 0.7rem;
+    font-weight: 650;
+    backdrop-filter: blur(12px);
+  }
+
+  .next-view .material-symbols-rounded { font-size: 1rem; }
+
+  .carousel-dots {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 1.2rem;
+  }
+
+  .carousel-dots button {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    background: var(--md-sys-color-outline-variant);
+    transition: width 240ms ease, background 240ms ease;
+  }
+
+  .carousel-dots button.active {
+    width: 2rem;
+    background: var(--md-sys-color-primary);
+  }
+
+  .placeholder-note {
+    margin-top: 0.65rem;
+    color: var(--md-sys-color-on-surface-variant);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-align: center;
+  }
+
+  .feature-section,
+  .hardware-section { padding-block: clamp(5rem, 9vw, 8rem); }
+
+  .feature-section { border-top: 1px solid var(--md-sys-color-outline-variant); }
+
+  .section-heading {
+    max-width: 42rem;
+    margin: 0 auto clamp(2.5rem, 5vw, 4rem);
+    text-align: center;
+  }
+
+  .section-heading--left {
+    margin-left: 0;
+    text-align: left;
+  }
+
+  .section-heading > span,
+  .card-eyebrow {
+    color: var(--md-sys-color-primary);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .section-heading h2 {
+    margin-top: 0.8rem;
+    font-size: clamp(2rem, 4vw, 3.6rem);
+    font-weight: 620;
+    letter-spacing: -0.045em;
+    line-height: 1.05;
+  }
+
+  .section-heading > p {
+    margin-top: 1rem;
+    color: var(--md-sys-color-on-surface-variant);
+    line-height: 1.65;
+  }
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border-block: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .feature-card {
+    position: relative;
+    min-height: 22rem;
+    padding: 2rem 1.6rem;
+    border-right: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .feature-card:last-child { border-right: 0; }
+
+  .feature-number {
+    color: var(--md-sys-color-outline);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+  }
+
+  .feature-icon {
+    display: grid;
+    width: 3.5rem;
+    height: 3.5rem;
+    margin: 3.4rem 0 2rem;
+    place-items: center;
+    border-radius: 1rem;
+    background: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
+  }
+
+  .feature-card h3,
+  .hardware-card h3 {
+    margin-top: 0.45rem;
+    font-size: 1.12rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+
+  .card-copy,
+  .hardware-card p {
+    margin-top: 0.8rem;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 0.86rem;
+    line-height: 1.65;
+  }
+
+  .hardware-section {
+    width: 100%;
+    max-width: none;
+    padding-inline: max(1rem, calc((100% - 80rem) / 2));
+    background: var(--md-sys-color-surface-container-low);
+  }
+
+  .hardware-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .hardware-card {
+    overflow: hidden;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 1.25rem;
+    background: var(--md-sys-color-surface-container-lowest);
+    transition: transform 220ms ease, border-color 220ms ease;
+  }
+
+  .hardware-card:hover {
+    transform: translateY(-0.25rem);
+    border-color: var(--md-sys-color-outline);
+  }
+
+  .component-image {
+    position: relative;
+    height: 14rem;
+    overflow: hidden;
+    background: #e8edee;
+  }
+
+  .component-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    mix-blend-mode: multiply;
+    transition: transform 400ms ease;
+  }
+
+  :global(:root[data-theme='dark']) .component-image img {
+    mix-blend-mode: normal;
+    opacity: 0.88;
+  }
+
+  .hardware-card:hover .component-image img { transform: scale(1.035); }
+
+  .component-image span {
+    position: absolute;
+    top: 0.9rem;
+    left: 0.9rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.72);
+    color: white;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .component-copy {
+    min-height: 9.5rem;
+    padding: 1.35rem;
+  }
+
+  .prototype-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    max-width: 48rem;
+    margin: 3rem auto 0;
+    padding: 1.25rem;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    border-radius: 1rem;
+    background: var(--md-sys-color-surface-container);
+  }
+
+  .prototype-note > span { color: var(--md-sys-color-primary); }
+  .prototype-note strong { font-size: 0.9rem; }
+
+  .prototype-note p {
+    margin-top: 0.2rem;
+    color: var(--md-sys-color-on-surface-variant);
+    font-size: 0.8rem;
+    line-height: 1.5;
+  }
+
+  @media (max-width: 1024px) {
+    .landing-hero {
+      grid-template-columns: 1fr;
+      min-height: auto;
+      gap: 3.5rem;
+    }
+
+    h1 { max-width: 14ch; }
+
+    .rover-showcase {
+      width: min(100%, 44rem);
+      margin-inline: auto;
+    }
+
+    .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .feature-card:nth-child(2) { border-right: 0; }
+    .feature-card:nth-child(-n + 2) { border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+  }
+
+  @media (max-width: 760px) {
+    .landing-hero,
+    .feature-section { width: min(100% - 1.5rem, 80rem); }
+    .landing-hero { padding-block: 3.5rem 5rem; }
+    h1 { font-size: clamp(2.75rem, 13vw, 4.2rem); }
+
+    .rover-stage {
+      aspect-ratio: 0.9;
+      border-radius: 1.5rem;
+    }
+
+    .next-view {
+      top: 0.8rem;
+      right: 0.8rem;
+    }
+
+    .view-caption {
+      right: 1rem;
+      bottom: 1rem;
+      left: 1rem;
+    }
+
+    .feature-grid,
+    .hardware-grid { grid-template-columns: 1fr; }
+
+    .feature-card {
+      min-height: auto;
+      padding: 1.6rem 1rem 2rem;
+      border-right: 0;
+      border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    }
+
+    .feature-card:last-child { border-bottom: 0; }
+    .feature-icon { margin-block: 2rem 1.5rem; }
+    .component-image { height: 13rem; }
+  }
+
   @media (prefers-reduced-motion: no-preference) {
-    /* 1. Primary Visual (Radar) establishes the spatial background */
-    .hero-radar-layer {
-      animation: resolve-radar 1.1s cubic-bezier(0.2, 0.0, 0, 1.0) backwards;
-      animation-delay: 0.1s;
-    }
-    
-    /* 2. Headline & Copy sweep in, overlapping the radar */
-    .hero-text-layer {
-      animation: resolve-text 0.9s cubic-bezier(0.2, 0.0, 0, 1.0) backwards;
-      animation-delay: 0.25s;
+    .hero-copy { animation: enter-copy 700ms cubic-bezier(0.2, 0, 0, 1) backwards; }
+    .hero-visual { animation: enter-visual 850ms 120ms cubic-bezier(0.2, 0, 0, 1) backwards; }
+
+    @keyframes enter-copy {
+      from { opacity: 0; transform: translateY(1.5rem); }
     }
 
-    /* 3. Secondary Metadata / Metrics settle in last */
-    .hero-metrics-layer {
-      animation: resolve-metrics 0.8s cubic-bezier(0.2, 0.0, 0, 1.0) backwards;
-      animation-delay: 0.4s;
-    }
-
-    @keyframes resolve-radar {
-      0% { opacity: 0; transform: scale(0.97) translateY(12px); filter: blur(2px); }
-      100% { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); }
-    }
-
-    @keyframes resolve-text {
-      0% { opacity: 0; transform: translateY(24px); }
-      100% { opacity: 1; transform: translateY(0); }
-    }
-
-    @keyframes resolve-metrics {
-      0% { opacity: 0; transform: translateY(16px); }
-      100% { opacity: 1; transform: translateY(0); }
-    }
-
-    /* --- SCROLL CHOREOGRAPHY (Continuous Spatial Transition) --- */
-    /* Modern CSS scroll-driven animations with graceful fallback */
-    @supports (animation-timeline: view()) {
-      .hero-text-layer {
-        /* Text lifts out faster than the background scrolls, dissolving */
-        animation: hero-text-scroll linear both;
-        animation-timeline: view();
-        animation-range: exit 0% exit 100%;
-        will-change: transform, opacity;
-      }
-
-      .hero-radar-layer {
-        /* Radar visually anchors and sinks backward to create parallax depth */
-        animation: hero-radar-scroll linear both;
-        animation-timeline: view();
-        animation-range: exit 0% exit 100%;
-        transform-origin: center top;
-        will-change: transform, opacity;
-      }
-
-      .hardware-section {
-        /* Next section rises slightly into the fading hero */
-        animation: section-enter linear both;
-        animation-timeline: view();
-        animation-range: entry 10% cover 30%;
-        will-change: transform, opacity;
-      }
-
-      @keyframes hero-text-scroll {
-        to { opacity: 0; transform: translateY(-70px); }
-      }
-
-      @keyframes hero-radar-scroll {
-        to { opacity: 0.15; transform: translateY(45px) scale(0.96); }
-      }
-
-      @keyframes section-enter {
-        from { opacity: 0; transform: translateY(50px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
+    @keyframes enter-visual {
+      from { opacity: 0; transform: translateY(1.5rem) scale(0.98); }
     }
   }
 </style>

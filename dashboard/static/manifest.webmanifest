@@ -1,0 +1,18 @@
+{
+  "name": "DeepTrack Mine Rescue Console",
+  "short_name": "DeepTrack",
+  "description": "Offline-capable monitoring and control console for the DeepTrack mine-rescue rover.",
+  "start_url": "/dashboard/demo",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fdff",
+  "theme_color": "#006874",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

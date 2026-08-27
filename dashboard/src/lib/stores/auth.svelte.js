@@ -23,6 +23,7 @@ class AuthStore {
       this.session = session ?? null;
       this.user = session?.user ?? null;
       this.isLoading = false;
+      if (session) setTimeout(() => void this.verifyCurrentUser(), 0);
     });
 
     // 2. Read existing session from localStorage
@@ -33,10 +34,22 @@ class AuthStore {
       }
       this.session = session ?? null;
       this.user = session?.user ?? null;
+      if (session) await this.verifyCurrentUser();
     } catch (err) {
       console.error('[auth] getSession exception:', err);
     } finally {
       this.isLoading = false;
+    }
+  }
+
+  async verifyCurrentUser() {
+    if (!this.session || navigator.onLine === false) return;
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (!error && data?.user) this.user = data.user;
+    } catch {
+      // A cached session still enables the local/offline console. RLS performs
+      // authoritative authorization when queued data reaches Supabase.
     }
   }
 

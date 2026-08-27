@@ -6,11 +6,17 @@
 
   let statusText = $state('Finishing sign in...');
   let hasError = $state(false);
+  let errorDetail = $state('');
 
   onMount(async () => {
     try {
       // 1. Check for PKCE ?code= in URL query params
       const urlParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      const providerError = urlParams.get('error_description') ||
+        hashParams.get('error_description') || urlParams.get('error') ||
+        hashParams.get('error');
+      if (providerError) throw new Error(providerError);
       const code = urlParams.get('code');
 
       if (code) {
@@ -42,7 +48,6 @@
       // 2. Check for implicit #access_token= in URL hash
       if (window.location.hash && window.location.hash.includes('access_token')) {
         statusText = 'Checking sign in...';
-        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
         const access_token = hashParams.get('access_token');
         const refresh_token = hashParams.get('refresh_token');
 
@@ -78,20 +83,16 @@
           goto('/dashboard/real', { replaceState: true });
         } else {
           hasError = true;
-          statusText = 'Sign in failed. Returning to the sign-in page...';
-          setTimeout(() => {
-            goto('/auth', { replaceState: true });
-          }, 1500);
+          statusText = 'Sign in could not be completed.';
+          errorDetail = 'No authenticated session was returned. Check the provider callback and Supabase redirect allowlist.';
         }
       }, 800);
 
-    } catch (err) {
+    } catch (/** @type {any} */ err) {
       console.error('[OAuth Callback] Exception:', err);
       hasError = true;
-      statusText = 'Sign in failed. Returning to the sign-in page...';
-      setTimeout(() => {
-        goto('/auth', { replaceState: true });
-      }, 1500);
+      statusText = 'Sign in could not be completed.';
+      errorDetail = err?.message || 'The provider rejected the sign-in request.';
     }
   });
 </script>
@@ -110,5 +111,9 @@
     <p class="text-sm font-medium {hasError ? 'text-[var(--md-sys-color-error)]' : 'text-[var(--md-sys-color-on-surface-variant)]'}">
       {statusText}
     </p>
+    {#if hasError}
+      <p class="max-w-md text-sm text-[var(--md-sys-color-on-surface-variant)]">{errorDetail}</p>
+      <a class="ui-button ui-button--filled" href="/auth">Return to sign in</a>
+    {/if}
   </div>
 </div>

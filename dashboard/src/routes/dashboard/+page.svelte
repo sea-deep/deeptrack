@@ -13,6 +13,8 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { auth } from '$lib/stores/auth.svelte.js';
+  import { supabase } from '$lib/supabaseClient.js';
+  import { createDashboardSync } from '$lib/offline/dashboardSync.js';
   import { initialTelemetry as demoTelemetry, initialScanPoints as demoScanPoints } from '$lib/mocks/telemetryMock.js';
   import { createUnknownTelemetry, createEmptyHistory, createDemoHistory } from '$lib/state/telemetry.js';
   import { roverCalibration } from '$lib/config/roverCalibration.js';
@@ -87,6 +89,18 @@
   let sentinelDemoStartedAt = 0;
   let lastHazardZoneAt = 0;
   let hazardZones = $state(/** @type {Array<{x:number,y:number,score:number,state:string,simulated:boolean}>} */ ([]));
+  let cloudSyncState = $state({
+    online: true, status: 'idle', pending: 0,
+    lastSyncedAt: null, lastError: ''
+  });
+  let cloudSyncUserId = null;
+  let cloudGatewaySession = null;
+  let lastCloudMapAt = 0;
+  let lastSentinelRecordState = 'NORMAL';
+  let dashboardSync = createDashboardSync({
+    client: supabase,
+    onState: (next) => { cloudSyncState = next; }
+  });
 
   // --- Console Specific State ---
   /** @type {'MANUAL' | 'AUTO_EXPLORE'} */
@@ -169,6 +183,18 @@
       : estimatedMapState.pose.known ? 'Estimated from session origin'
         : 'Calibrated pose required'
   );
+  let cloudSyncLabel = $derived.by(() => {
+    if (!cloudSyncState.online) {
+      return cloudSyncState.pending
+        ? `Offline · ${cloudSyncState.pending} queued` : 'Offline · saved locally';
+    }
+    if (cloudSyncState.status === 'syncing')
+      return `Syncing${cloudSyncState.pending ? ` · ${cloudSyncState.pending}` : ''}`;
+    if (cloudSyncState.status === 'error')
+      return `Local only · ${cloudSyncState.pending} queued`;
+    return cloudSyncState.pending
+      ? `${cloudSyncState.pending} queued` : 'Cloud synced';
+  });
 
   // Modal State
   let selectedSensorKey = $state(/** @type {string | null} */ (null));
@@ -178,6 +204,81 @@
   let keyState = $state({ w: false, a: false, s: false, d: false, space: false });
   let currentMotorL = $state(0);
   let currentMotorR = $state(0);
+
+  function poseForStorage() {
+    return estimatedMapState.pose.known ? {
+      x_m: estimatedMapState.pose.x_m,
+      y_m: estimatedMapState.pose.y_m,
+      heading_rad: estimatedMapState.pose.heading_rad,
+      confidence: estimatedMapState.pose.confidence
+    } : {};
+  }
+
+  function cacheHardwareSnapshot() {
+    if (missionMode !== 'hardware' || !cloudSyncUserId) return;
+    void dashboardSync.cacheSnapshot({
+      saved_at: new Date().toISOString(),
+      telemetry,
+      scan_points: scanPoints.slice(-64),
+      history: historyBuffers,
+      rover_pose: roverPose,
+      hazard_zones: hazardZones.slice(-8),
+      logs: realLogs.slice(0, 100),
+      map_summary: {
+        pose: poseForStorage(),
+        trajectory: (realMapEvidence.trajectory || []).slice(-200),
+        occupied_count: realMapEvidence.occupied?.length || 0,
+        frontier_count: realMapEvidence.frontiers?.length || 0
+      }
+    });
+  }
+
+  async function restoreHardwareSnapshot() {
+    if (!cloudSyncUserId || missionMode !== 'hardware' || isConnected) return;
+    const cached = await dashboardSync.restoreSnapshot();
+    const value = cached?.value;
+    if (!value?.telemetry) return;
+    telemetry = {
+      ...createUnknownTelemetry(), ...value.telemetry,
+      source: 'STALE', alertState: 'UNKNOWN'
+    };
+    scanPoints = Array.isArray(value.scan_points) ? value.scan_points : [];
+    historyBuffers = value.history || createEmptyHistory();
+    roverPose = value.rover_pose || roverPose;
+    hazardZones = Array.isArray(value.hazard_zones) ? value.hazard_zones : [];
+    realLogs = Array.isArray(value.logs) ? value.logs : [];
+  }
+
+  async function initializeCloudSync(userId) {
+    if (!userId || cloudSyncUserId === userId) return;
+    dashboardSync.dispose();
+    dashboardSync = createDashboardSync({
+      client: supabase,
+      onState: (next) => { cloudSyncState = next; }
+    });
+    cloudSyncUserId = userId;
+    await dashboardSync.init(userId);
+    await restoreHardwareSnapshot();
+  }
+
+  async function ensureCloudSession(packet) {
+    if (missionMode !== 'hardware' || !cloudSyncUserId ||
+        !Number.isInteger(packet.session)) return;
+    if (cloudGatewaySession === packet.session && dashboardSync.getSessionId()) return;
+    if (dashboardSync.getSessionId()) {
+      await dashboardSync.closeSession('interrupted', poseForStorage());
+    }
+    cloudGatewaySession = packet.session;
+    await dashboardSync.beginSession({
+      roverId: 'DT-ALPHA-01',
+      startPose: poseForStorage(),
+      metadata: {
+        protocol: packet.protocol,
+        gateway_session: packet.session,
+        radio_ready: packet.radio_ready === true
+      }
+    });
+  }
 
   function resetInteractionState() {
     activeNavView = 'console';
@@ -208,6 +309,9 @@
     sentinelDemoStartedAt = 0;
     lastHazardZoneAt = 0;
     hazardZones = [];
+    cloudGatewaySession = null;
+    lastCloudMapAt = 0;
+    lastSentinelRecordState = 'NORMAL';
     sentinelResult = hazardEngine?.reset() || createUnavailableHazardResult();
     realMapEvidence = renderableEvidence(estimatedMapState);
     activeDrivePointerId = null;
@@ -234,6 +338,9 @@
     scanPoints = [];
     historyBuffers = createEmptyHistory();
     realLogs = [];
+    if (auth.user?.id) {
+      void initializeCloudSync(auth.user.id).then(restoreHardwareSnapshot);
+    }
   }
 
   $effect(() => {
@@ -246,6 +353,10 @@
       if (auth.user) launchHardware();
       else goto('/auth');
     }
+  });
+
+  $effect(() => {
+    if (auth.user?.id) void initializeCloudSync(auth.user.id);
   });
 
   // --- Web Serial API ---
@@ -274,6 +385,10 @@
   function appendRealLog(packet) {
     const log = gatewayEventToLog(packet, ++eventCounter);
     realLogs = [log, ...realLogs.filter((item) => item.id !== log.id)].slice(0, 250);
+    if (missionMode === 'hardware') {
+      void dashboardSync.record('event', { ...log, code: packet.code });
+      cacheHardwareSnapshot();
+    }
   }
 
   /** @param {Record<string, any>} packet */
@@ -297,6 +412,7 @@
         estimatedMapState = createEstimatedMapState();
         realMapEvidence = renderableEvidence(estimatedMapState);
       }
+      void ensureCloudSession(packet);
       gatewayRadioReady = packet.radio_ready === true;
       gatewayArmed = packet.armed === true;
       if (!gatewayArmed) isArmPending = false;
@@ -331,6 +447,25 @@
       historyBuffers.ultrasonic = [...historyBuffers.ultrasonic.slice(-29), ...(telemetry.frontDistanceCm === null ? [] : [telemetry.frontDistanceCm])];
       historyBuffers.pitch = [...historyBuffers.pitch.slice(-29), ...(telemetry.pitchDeg === null ? [] : [telemetry.pitchDeg])];
       historyBuffers.roll = [...historyBuffers.roll.slice(-29), ...(telemetry.rollDeg === null ? [] : [telemetry.rollDeg])];
+      void dashboardSync.record('telemetry', {
+        ...telemetry,
+        pose: poseForStorage(),
+        gateway_session: gatewaySession,
+        control_mode: controlMode
+      }, { capturedAt: telemetry.timestamp, throttleMs: 1_000 });
+      const cloudNow = Date.now();
+      if (cloudNow - lastCloudMapAt >= 10_000) {
+        lastCloudMapAt = cloudNow;
+        void dashboardSync.record('map_snapshot', {
+          pose: poseForStorage(),
+          trajectory: (realMapEvidence.trajectory || []).slice(-200),
+          occupied_count: realMapEvidence.occupied?.length || 0,
+          inflated_count: realMapEvidence.inflated?.length || 0,
+          frontier_count: realMapEvidence.frontiers?.length || 0,
+          hazard_zones: hazardZones.slice(-8)
+        });
+      }
+      cacheHardwareSnapshot();
     } else if (packet.type === 'scan') {
       scanPoints = upsertScanPoint(scanPoints, packet);
       if (missionController.mode === 'EXPLORE' &&
@@ -344,6 +479,16 @@
         Number.isFinite(packet.timestamp_ms) ? packet.timestamp_ms : performance.now()
       );
       realMapEvidence = renderableEvidence(estimatedMapState);
+      void dashboardSync.record('scan', {
+        angle_deg: packet.angle_deg,
+        distance_mm: packet.distance_mm,
+        valid: packet.valid === true,
+        scan_id: packet.scan_id,
+        range_status: packet.range_status,
+        confidence_pct: packet.confidence_pct,
+        pose: poseForStorage()
+      });
+      cacheHardwareSnapshot();
     } else if (packet.type === 'event') {
       appendRealLog(packet);
       if (packet.code === 'ARMED') {
@@ -378,6 +523,12 @@
   }
 
   function markSerialDisconnected() {
+    const endingPose = poseForStorage();
+    cacheHardwareSnapshot();
+    if (dashboardSync.getSessionId()) {
+      void dashboardSync.closeSession('interrupted', endingPose);
+    }
+    cloudGatewaySession = null;
     stopDriveRefresh();
     isConnected = false;
     transportMode = 'DISCONNECTED';
@@ -506,6 +657,10 @@
   async function disconnectWebSerial() {
     try {
       await safetyDisarm();
+      if (dashboardSync.getSessionId()) {
+        await dashboardSync.closeSession('closed', poseForStorage());
+        cloudGatewaySession = null;
+      }
       if (serialReader) {
         await serialReader.cancel();
         try { serialReader.releaseLock(); } catch {}
@@ -953,20 +1108,31 @@
   function updateSentinel(now) {
     if (!hazardEngine || missionMode === null) return;
     sentinelResult = hazardEngine.observe(telemetry, now, { heartbeatAgeMs });
+    if (missionMode === 'hardware' && sentinelResult.state !== lastSentinelRecordState) {
+      lastSentinelRecordState = sentinelResult.state;
+      void dashboardSync.record('sentinel', {
+        score: sentinelResult.score,
+        state: sentinelResult.state,
+        confidence: sentinelResult.confidence,
+        trend: sentinelResult.trend,
+        reasons: sentinelResult.reasons,
+        pose: poseForStorage()
+      });
+    }
     if (sentinelResult.score < 55 ||
-        now - lastHazardZoneAt < 5000 ||
+        now - lastHazardZoneAt < 8000 ||
         !(missionMode === 'demo' || estimatedMapState.pose.known)) return;
 
     const previous = hazardZones[hazardZones.length - 1];
     if (previous && Math.hypot(previous.x - roverPose.x,
-        previous.y - roverPose.y) < 12) return;
+        previous.y - roverPose.y) < 42) return;
     hazardZones = [...hazardZones, {
       x: roverPose.x,
       y: roverPose.y,
       score: sentinelResult.score,
       state: sentinelResult.state,
       simulated: missionMode === 'demo'
-    }].slice(-16);
+    }].slice(-8);
     lastHazardZoneAt = now;
   }
 
@@ -977,6 +1143,7 @@
     window.addEventListener('blur', handleWindowBlur);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', handleWindowBlur);
+    window.addEventListener('pagehide', cacheHardwareSnapshot);
 
     let disposed = false;
     void fetch('/models/hazard-model.json')
@@ -1094,6 +1261,12 @@
         telemetry.frontValid = true;
         telemetry.frontFresh = true;
         telemetry.frontBlocked = telemetry.frontDistanceCm < 25;
+        historyBuffers.gas = [...historyBuffers.gas.slice(-29), telemetry.gasRaw];
+        historyBuffers.temperature = [...historyBuffers.temperature.slice(-29), telemetry.temperature];
+        historyBuffers.water = [...historyBuffers.water.slice(-29), telemetry.waterRaw];
+        historyBuffers.ultrasonic = [...historyBuffers.ultrasonic.slice(-29), telemetry.frontDistanceCm];
+        historyBuffers.pitch = [...historyBuffers.pitch.slice(-29), telemetry.pitchDeg];
+        historyBuffers.roll = [...historyBuffers.roll.slice(-29), telemetry.rollDeg];
 
         if (!isEstop) {
           if (controlMode === 'AUTO_EXPLORE' && !isAutoPaused) {
@@ -1132,12 +1305,17 @@
       window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pagehide', handleWindowBlur);
+      window.removeEventListener('pagehide', cacheHardwareSnapshot);
       clearInterval(simInterval);
       clearInterval(heartbeatInterval);
       clearInterval(freshnessInterval);
       clearInterval(sentinelInterval);
       clearInterval(missionInterval);
       stopDriveRefresh();
+      cacheHardwareSnapshot();
+      if (dashboardSync.getSessionId())
+        void dashboardSync.closeSession('interrupted', poseForStorage());
+      dashboardSync.dispose();
       if (missionMode === 'hardware' && transportMode === 'SERIAL')
         void writeGatewayRecord({ type: 'stop' });
     };
@@ -1218,6 +1396,16 @@
           <span class="material-symbols-rounded text-[18px]">{missionMode === 'demo' ? 'science' : transportMode === 'SERIAL' ? 'usb' : 'memory'}</span>
           {missionMode === 'demo' ? 'DEMO · SIMULATED' : transportMode !== 'SERIAL' ? 'REAL · UNKNOWN' : !gatewaySession ? 'REAL · USB / WAITING' : !gatewayRadioReady ? 'REAL · RADIO DISABLED' : isArmPending || (gatewayArmed && !roverCommandArmed) ? 'REAL · ARMING' : gatewayArmed ? 'REAL · ARMED' : 'REAL · DISARMED'}
         </span>
+        {#if missionMode === 'hardware' && auth.user}
+          <span
+            class="hidden xl:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold {cloudSyncState.status === 'error' ? 'border-[var(--ui-color-warning)] bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)]' : cloudSyncState.online ? 'border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[var(--md-sys-color-on-surface-variant)]' : 'border-[var(--ui-color-warning)] bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)]'}"
+            title={cloudSyncState.lastError || 'Real rover records are saved locally first, then synced to your Supabase account.'}
+            aria-live="polite"
+          >
+            <span class="h-2 w-2 rounded-full {cloudSyncState.status === 'error' || !cloudSyncState.online ? 'bg-[var(--ui-color-warning)]' : cloudSyncState.status === 'syncing' ? 'bg-[var(--md-sys-color-primary)] animate-pulse' : 'bg-[var(--ui-color-success)]'}"></span>
+            {cloudSyncLabel}
+          </span>
+        {/if}
       </div>
 
       <!-- Center: Connection State -->

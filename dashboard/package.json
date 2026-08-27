@@ -11,7 +11,7 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json --watch",
-		"test:console": "node scripts/test_rover_console.js && node scripts/test_gateway_protocol.js && node scripts/test_manual_drive.js && node scripts/test_estimated_map.js && node scripts/test_mission_controller.js && node scripts/test_hazard_engine.js",
+		"test:console": "node scripts/test_rover_console.js && node scripts/test_gateway_protocol.js && node scripts/test_manual_drive.js && node scripts/test_estimated_map.js && node scripts/test_mission_controller.js && node scripts/test_hazard_engine.js && node scripts/test_dashboard_sync.js",
 		"audit:ui": "node scripts/audit_ui_ux.js"
 	},
 	"devDependencies": {
@@ -19,7 +19,6 @@
 		"@sveltejs/adapter-node": "^5.5.7",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
-		"@types/three": "^0.185.4",
 		"autoprefixer": "^10.5.4",
 		"axe-core": "^4.13.0",
 		"html-validate": "^11.10.0",
@@ -35,7 +34,6 @@
 	},
 	"dependencies": {
 		"@supabase/supabase-js": "^2.112.4",
-		"three": "^0.185.1",
 		"zod": "^4.4.3"
 	}
 }

@@ -253,26 +253,28 @@
     // occupancy grid or planner cost map.
     if (hazardZones.length) {
       ctx.save();
-      hazardZones.forEach((/** @type {{x:number,y:number,score:number,state:string,simulated?:boolean}} */ zone) => {
+      hazardZones.forEach((/** @type {{x:number,y:number,score:number,state:string,simulated?:boolean}} */ zone, index) => {
         const zx = cx + zone.x * zoom;
         const zy = cy + zone.y * zoom;
         const critical = zone.state === 'CRITICAL';
         const color = critical ? '#dc2626' : '#d97706';
-        const radius = (14 + Math.min(16, zone.score / 6)) * zoom;
+        const radius = (10 + Math.min(8, zone.score / 12)) * zoom;
         ctx.beginPath();
         ctx.arc(zx, zy, radius, 0, Math.PI * 2);
         ctx.fillStyle = critical
-          ? 'rgba(220,38,38,0.16)' : 'rgba(217,119,6,0.14)';
+          ? 'rgba(220,38,38,0.13)' : 'rgba(217,119,6,0.11)';
         ctx.fill();
         ctx.strokeStyle = color;
         ctx.lineWidth = 2;
         ctx.setLineDash(zone.simulated ? [5, 4] : []);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = color;
-        ctx.font = '700 11px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(`AI ${zone.score}`, zx, zy + 4);
+        if (index === hazardZones.length - 1) {
+          ctx.fillStyle = color;
+          ctx.font = '700 10px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(`AI ${zone.score}`, zx, zy + 3);
+        }
       });
       ctx.restore();
     }
