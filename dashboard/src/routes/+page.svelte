@@ -26,6 +26,7 @@
     { image: '/images/components/encoder.webp', name: 'Optical encoder', tag: 'Motion', copy: 'Measures wheel rotation to estimate speed and distance traveled.' },
     { image: '/images/components/mpu.webp', name: 'MPU6050 IMU', tag: 'Tilt', copy: 'Adds tilt and movement context when the rover travels over uneven ground.' },
     { image: '/images/components/vl53l0x.webp', name: 'VL53L0X ToF', tag: 'Distance', copy: 'High-precision Time-of-Flight laser sensor for millimeter-accurate obstacle detection.' },
+    { image: '/images/components/water-sensor.png', name: 'Water contact probe', tag: 'Liquid', copy: 'Detects the presence of water or puddles under the rover chassis.' },
     { image: '/images/components/chasis.webp', name: '4WD drive system', tag: 'Drive', copy: 'Four geared motors and two motor drivers provide simple skid-steer movement.' }
   ];
 
