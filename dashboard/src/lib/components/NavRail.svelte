@@ -35,8 +35,9 @@
   });
 </script>
 
+<!-- LEFT SIDE RAIL — visible on lg and above -->
 <aside
-  class="w-20 shrink-0 h-full bg-[var(--md-sys-color-surface-container)] border-r border-[var(--md-sys-color-outline-variant)] flex flex-col items-center justify-between py-5 z-40 select-none transition-colors duration-200 overflow-visible"
+  class="hidden lg:flex w-20 shrink-0 h-full bg-[var(--md-sys-color-surface-container)] border-r border-[var(--md-sys-color-outline-variant)] flex-col items-center justify-between py-5 z-40 select-none transition-colors duration-200 overflow-visible"
   aria-label="Dashboard navigation"
 >
   <!-- Top Brand Mark & Destinations -->
@@ -93,7 +94,7 @@
     </nav>
   </div>
 
-  <!-- Bottom Utilities: Status dot & Compact Circular Theme Toggle & Account Control -->
+  <!-- Bottom Utilities: Status dot, Theme Toggle, Account Control -->
   <div class="flex flex-col items-center gap-3.5 w-full">
     <!-- Link Status Indicator -->
     <div class="flex items-center justify-center w-8 h-8">
@@ -121,3 +122,58 @@
     <AccountPopover anchor="bottom-left" />
   </div>
 </aside>
+
+<!-- BOTTOM NAVIGATION BAR — visible on screens smaller than lg -->
+<nav
+  class="lg:hidden fixed bottom-0 inset-x-0 z-50 bg-[var(--md-sys-color-surface-container)] border-t border-[var(--md-sys-color-outline-variant)] flex items-stretch select-none safe-area-bottom"
+  aria-label="Dashboard navigation"
+>
+  {#each navItems as item}
+    <button
+      type="button"
+      class="flex-1 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] relative transition-colors duration-150 focus-visible:outline-none focus-visible:ring-inset focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] {activeView === item.id ? 'text-[var(--md-sys-color-on-surface)]' : 'text-[var(--md-sys-color-on-surface-variant)]'}"
+      onclick={() => onSelectView(item.id)}
+      aria-current={activeView === item.id ? 'page' : undefined}
+    >
+      <!-- Active indicator pill -->
+      {#if activeView === item.id}
+        <div
+          class="absolute top-1.5 left-1/2 -translate-x-1/2 w-14 h-8 rounded-full bg-[var(--md-sys-color-primary-container)] pointer-events-none"
+          in:receiveShared={{ key: 'bottomnav-active' }}
+          out:sendShared={{ key: 'bottomnav-active' }}
+        ></div>
+      {/if}
+      <span class="material-symbols-rounded text-[22px] relative z-10 {activeView === item.id ? 'filled text-[var(--md-sys-color-on-primary-container)]' : ''}">
+        {item.icon}
+      </span>
+      <span class="text-[11px] font-medium leading-tight relative z-10 {activeView === item.id ? 'text-[var(--md-sys-color-on-surface)] font-semibold' : ''}">
+        {item.label}
+      </span>
+    </button>
+  {/each}
+
+  <!-- Utilities: status dot + theme toggle — compressed into one extra slot -->
+  <div class="flex flex-col items-center justify-center gap-1 px-2 min-w-[52px] border-l border-[var(--md-sys-color-outline-variant)]">
+    <div
+      class="w-2.5 h-2.5 rounded-full mb-0.5 transition-colors duration-300"
+      class:bg-[var(--ui-color-success)]={isConnected && !isEstop}
+      class:bg-[var(--md-sys-color-error)]={isEstop || !isConnected}
+      class:animate-pulse={isConnected && !isEstop}
+      title={isEstop ? 'Remote stop' : isConnected ? 'Connected' : 'Disconnected'}
+    ></div>
+    <button
+      type="button"
+      class="w-8 h-8 rounded-full flex items-center justify-center text-[var(--md-sys-color-on-surface-variant)] hover:bg-[var(--md-sys-color-surface-container-highest)] active:scale-95 transition-all duration-150"
+      onclick={handleThemeToggle}
+      aria-label="Toggle theme"
+    >
+      <span class="material-symbols-rounded text-[20px]">{currentTheme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
+    </button>
+  </div>
+</nav>
+
+<style>
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+</style>

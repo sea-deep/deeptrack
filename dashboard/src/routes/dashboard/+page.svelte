@@ -99,6 +99,8 @@
   let cloudGatewaySession = null;
   let lastCloudMapAt = 0;
   let lastSentinelRecordState = 'NORMAL';
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let mapEvidenceRefreshTimer = null;
   let dashboardSync = createDashboardSync({
     client: supabase,
     onState: (next) => { cloudSyncState = next; }
@@ -197,6 +199,12 @@
     return cloudSyncState.pending
       ? `${cloudSyncState.pending} queued` : 'Cloud synced';
   });
+  let cloudSyncIcon = $derived(
+    cloudSyncState.status === 'syncing' ? 'cloud_sync'
+      : cloudSyncState.status === 'error' ? 'cloud_off'
+        : !cloudSyncState.online ? 'cloud_off'
+          : cloudSyncState.pending ? 'cloud_upload' : 'cloud_done'
+  );
 
   // Modal State
   let selectedSensorKey = $state(/** @type {string | null} */ (null));
@@ -214,6 +222,25 @@
       heading_rad: estimatedMapState.pose.heading_rad,
       confidence: estimatedMapState.pose.confidence
     } : {};
+  }
+
+  // Pose packets can arrive far more often than occupancy topology changes.
+  // Rebuilding inflation and frontier clusters for every encoder packet was
+  // the dashboard's main CPU hotspot. Keep trajectory live, and coalesce the
+  // expensive map projection after scan evidence changes.
+  function updateRenderableTrajectory() {
+    realMapEvidence = {
+      ...realMapEvidence,
+      trajectory: estimatedMapState.trajectory
+    };
+  }
+
+  function scheduleMapEvidenceRefresh() {
+    if (mapEvidenceRefreshTimer) return;
+    mapEvidenceRefreshTimer = setTimeout(() => {
+      mapEvidenceRefreshTimer = null;
+      realMapEvidence = renderableEvidence(estimatedMapState);
+    }, 100);
   }
 
   function cacheHardwareSnapshot() {
@@ -434,7 +461,7 @@
       telemetry = applyGatewayTelemetry(telemetry, packet);
       if (gatewayArmed && roverCommandArmed) isArmPending = false;
       estimatedMapState = updateEstimatedPose(estimatedMapState, packet);
-      realMapEvidence = renderableEvidence(estimatedMapState);
+      updateRenderableTrajectory();
       if (estimatedMapState.pose.known) {
         roverPose = {
           x: estimatedMapState.pose.x_m * roverCalibration.map.pixelsPerMeter,
@@ -482,7 +509,7 @@
         estimatedMapState, [packet],
         Number.isFinite(packet.timestamp_ms) ? packet.timestamp_ms : performance.now()
       );
-      realMapEvidence = renderableEvidence(estimatedMapState);
+      scheduleMapEvidenceRefresh();
       void dashboardSync.record('scan', {
         angle_deg: packet.angle_deg,
         distance_mm: packet.distance_mm,
@@ -1311,6 +1338,8 @@
       window.removeEventListener('pagehide', handleWindowBlur);
       window.removeEventListener('pagehide', cacheHardwareSnapshot);
       clearInterval(simInterval);
+      if (mapEvidenceRefreshTimer) clearTimeout(mapEvidenceRefreshTimer);
+      mapEvidenceRefreshTimer = null;
       clearInterval(heartbeatInterval);
       clearInterval(freshnessInterval);
       clearInterval(sentinelInterval);
@@ -1382,7 +1411,7 @@
     {isEstop}
   />
 
-  <div class="flex-1 flex flex-col h-full overflow-hidden">
+  <div class="flex-1 flex flex-col h-full overflow-hidden pb-[56px] lg:pb-0">
     <!-- PERSISTENT TOP APP BAR (64px, Flat, No Cards) -->
     <header class="h-16 shrink-0 px-4 md:px-6 bg-[var(--md-sys-color-surface)] border-b border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-4">
       
@@ -1402,12 +1431,17 @@
         </span>
         {#if missionMode === 'hardware' && auth.user}
           <span
-            class="hidden xl:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold {cloudSyncState.status === 'error' ? 'border-[var(--ui-color-warning)] bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)]' : cloudSyncState.online ? 'border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[var(--md-sys-color-on-surface-variant)]' : 'border-[var(--ui-color-warning)] bg-[var(--ui-color-warning-container)] text-[var(--ui-color-on-warning-container)]'}"
-            title={cloudSyncState.lastError || 'Real rover records are saved locally first, then synced to your Supabase account.'}
+            class="relative hidden h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--md-sys-color-on-surface-variant)] xl:inline-flex {cloudSyncState.status === 'error' || !cloudSyncState.online ? '!text-[var(--ui-color-warning)]' : cloudSyncState.pending ? '!text-[var(--md-sys-color-primary)]' : '!text-[var(--ui-color-success)]'}"
+            title={`${cloudSyncLabel}. ${cloudSyncState.lastError || 'Real rover records are saved locally first, then synced to your Supabase account.'}`}
+            aria-label={cloudSyncLabel}
             aria-live="polite"
           >
-            <span class="h-2 w-2 rounded-full {cloudSyncState.status === 'error' || !cloudSyncState.online ? 'bg-[var(--ui-color-warning)]' : cloudSyncState.status === 'syncing' ? 'bg-[var(--md-sys-color-primary)] animate-pulse' : 'bg-[var(--ui-color-success)]'}"></span>
-            {cloudSyncLabel}
+            <span class="material-symbols-rounded text-[24px] {cloudSyncState.status === 'syncing' ? 'cloud-syncing' : ''}" aria-hidden="true">{cloudSyncIcon}</span>
+            {#if cloudSyncState.pending > 0}
+              <span class="absolute -right-0.5 -top-0.5 grid min-h-4 min-w-4 place-items-center rounded-full bg-[var(--md-sys-color-primary)] px-1 text-[9px] font-bold leading-none text-[var(--md-sys-color-on-primary)]" aria-hidden="true">
+                {cloudSyncState.pending > 99 ? '99+' : cloudSyncState.pending}
+              </span>
+            {/if}
           </span>
         {/if}
       </div>
@@ -1467,6 +1501,21 @@
         {serialConnectionError}
       </div>
     {/if}
+
+<style>
+  .cloud-syncing {
+    animation: cloud-breathe 1.1s ease-in-out infinite;
+  }
+
+  @keyframes cloud-breathe {
+    0%, 100% { opacity: 0.42; transform: scale(0.94); }
+    50% { opacity: 1; transform: scale(1.08); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cloud-syncing { animation: none; }
+  }
+</style>
 
     <!-- CONTENT AREA -->
     <main class="flex-1 overflow-hidden relative">

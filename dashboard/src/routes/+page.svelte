@@ -615,7 +615,8 @@
 
   .flowchart-section {
     padding-block: clamp(5rem, 9vw, 8rem);
-    background: #ffffff;
+    background: var(--md-sys-color-surface);
+    border-top: 1px solid var(--md-sys-color-outline-variant);
   }
 
   .flowchart-section .section-heading {
@@ -623,7 +624,7 @@
   }
 
   .flowchart-section .section-heading span {
-    color: #0b6b72;
+    color: var(--md-sys-color-primary);
     font-size: 0.65rem;
     font-weight: 800;
     letter-spacing: 0.15em;
@@ -631,7 +632,7 @@
   }
 
   .flowchart-section .section-heading h2 {
-    color: #001a1c;
+    color: var(--md-sys-color-on-surface);
     font-size: clamp(2rem, 4vw, 3.2rem);
     font-weight: 700;
     margin-top: 0.5rem;
@@ -639,7 +640,7 @@
   }
 
   .flowchart-section .section-heading p {
-    color: #556667;
+    color: var(--md-sys-color-on-surface-variant);
     margin-top: 1rem;
     font-size: 0.9rem;
     max-width: 36rem;
@@ -661,10 +662,10 @@
     gap: 2rem;
     width: 100%;
     padding: 2.5rem;
-    background: #ffffff;
-    border: 1px solid #e1e7e8;
+    background: var(--md-sys-color-surface-container-lowest);
+    border: 1px solid var(--md-sys-color-outline-variant);
     border-radius: 1.5rem;
-    box-shadow: 0 8px 24px rgb(0 26 28 / 0.04);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--md-sys-color-on-surface) 4%, transparent);
     position: relative;
     z-index: 2;
   }
@@ -681,8 +682,8 @@
     flex-shrink: 0;
     place-items: center;
     border-radius: 1.25rem;
-    background: #a5f0ff;
-    color: #001a1c;
+    background: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
   }
 
   .node-icon .material-symbols-rounded {
@@ -692,13 +693,13 @@
   .node-content h4 {
     font-size: 1.25rem;
     font-weight: 700;
-    color: #001a1c;
+    color: var(--md-sys-color-on-surface);
     margin-bottom: 0.75rem;
   }
 
   .node-content p {
     font-size: 0.95rem;
-    color: #556667;
+    color: var(--md-sys-color-on-surface-variant);
     line-height: 1.6;
     margin: 0;
   }
@@ -710,7 +711,7 @@
     justify-content: center;
     height: 6rem;
     gap: 0.5rem;
-    color: #0b6b72;
+    color: var(--md-sys-color-primary);
     position: relative;
     z-index: 1;
   }
@@ -724,19 +725,19 @@
     width: 2px;
     transform: translateX(-50%);
     z-index: -1;
-    border-left: 2px dashed #0b6b72;
+    border-left: 2px dashed var(--md-sys-color-primary);
     opacity: 0.4;
   }
 
   .track-link span {
-    background: #f4f7f8;
+    background: var(--md-sys-color-surface);
     padding: 0.5rem;
     border-radius: 50%;
     font-size: 1.5rem;
   }
   
   .track-link small {
-    background: #f4f7f8;
+    background: var(--md-sys-color-surface);
     padding: 0.2rem 0.8rem;
     border-radius: 99px;
     font-weight: 600;

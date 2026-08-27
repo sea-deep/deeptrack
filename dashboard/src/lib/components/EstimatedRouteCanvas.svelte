@@ -54,11 +54,16 @@
   /** @type {{x: number, y: number} | null} */
   let currentWaypoint = $state(null);
   let drawFrame = 0;
+  let canvasVisible = true;
 
   function scheduleDraw() {
-    if (typeof requestAnimationFrame === 'undefined') return;
-    cancelAnimationFrame(drawFrame);
-    drawFrame = requestAnimationFrame(drawMap);
+    if (typeof requestAnimationFrame === 'undefined' ||
+        typeof document !== 'undefined' && document.hidden || !canvasVisible) return;
+    if (drawFrame) return;
+    drawFrame = requestAnimationFrame(() => {
+      drawFrame = 0;
+      drawMap();
+    });
   }
 
   $effect(() => {
@@ -75,9 +80,9 @@
     void [mode, isRecording, isConnected, dataSource, hasPoseEvidence,
       roverPose.x, roverPose.y, roverPose.headingDeg, zoom, panX, panY,
       showTrajectory, showObstacles, showTofRays, showInflation,
-      showFrontiers, scanPoints.length, obstaclePoints.length,
-      inflatedPoints.length, frontierPoints.length, exploredTrail.length,
-      hazardZones.length, currentWaypoint?.x, currentWaypoint?.y, isDarkMode];
+      showFrontiers, scanPoints, obstaclePoints, inflatedPoints,
+      frontierPoints, exploredTrail, hazardZones,
+      currentWaypoint?.x, currentWaypoint?.y, isDarkMode];
     scheduleDraw();
   });
 
@@ -129,6 +134,18 @@
         }));
   });
 
+  // Recording follows actual pose changes. A permanent 250 ms timer used to
+  // wake the page even while the rover and map were idle.
+  $effect(() => {
+    const x = roverPose.x;
+    const y = roverPose.y;
+    if (!isRecording || !isConnected) return;
+    const lastPoint = exploredTrail[exploredTrail.length - 1];
+    if (!lastPoint || Math.hypot(lastPoint.x - x, lastPoint.y - y) > 6) {
+      exploredTrail = [...exploredTrail, { x, y }];
+    }
+  });
+
   function updateThemeState() {
     isDarkMode = getTheme() === 'dark';
   }
@@ -141,13 +158,14 @@
     const w = canvas.width;
     const h = canvas.height;
 
-    if (followRover && hasPoseEvidence) {
-      panX = -roverPose.x * zoom;
-      panY = -roverPose.y * zoom;
-    }
-
-    const cx = w / 2 + panX;
-    const cy = h / 2 + panY;
+    // Following is a view transform, not mutable UI state. Writing pan state
+    // from inside the paint function caused a second reactive paint.
+    const viewPanX = followRover && hasPoseEvidence
+      ? -roverPose.x * zoom : panX;
+    const viewPanY = followRover && hasPoseEvidence
+      ? -roverPose.y * zoom : panY;
+    const cx = w / 2 + viewPanX;
+    const cy = h / 2 + viewPanY;
 
     // Theme Palette
     const bgFill = isDarkMode ? '#0c0e10' : '#f8f9fc';
@@ -171,22 +189,20 @@
     const gridSize = pixelsPerMeter * zoom;
     ctx.strokeStyle = gridStroke;
     ctx.lineWidth = 1;
+    ctx.beginPath();
 
     const startX = cx % gridSize;
     for (let x = startX; x < w; x += gridSize) {
-      ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h);
-      ctx.stroke();
     }
 
     const startY = cy % gridSize;
     for (let y = startY; y < h; y += gridSize) {
-      ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(w, y);
-      ctx.stroke();
     }
+    ctx.stroke();
 
     // 2. Explored Corridor Region & Trajectory
     if (showTrajectory) {
@@ -229,14 +245,16 @@
       });
     }
     if (showObstacles) {
+      ctx.fillStyle = obstacleFill;
+      ctx.beginPath();
       obstaclePoints.forEach(pt => {
         const sx = cx + pt.x * zoom;
         const sy = cy + pt.y * zoom;
-        ctx.beginPath();
+        if (sx < -4 || sy < -4 || sx > w + 4 || sy > h + 4) return;
+        ctx.moveTo(sx + 2, sy);
         ctx.arc(sx, sy, 2, 0, Math.PI * 2);
-        ctx.fillStyle = obstacleFill;
-        ctx.fill();
       });
+      ctx.fill();
     }
 
     if (showFrontiers) {
@@ -314,6 +332,9 @@
     // With no calibrated pose, keep the sweep in a clearly labelled local
     // rover frame instead of hiding real scan evidence or inventing a world pose.
     if (showTofRays && (hasPoseEvidence || hasLocalScanEvidence)) {
+      ctx.strokeStyle = tofRayColor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
       scanPoints.forEach((/** @type {ScanPoint} */ p) => {
         if (!p.valid) return;
         const rayAngle = (roverPose.headingDeg -
@@ -324,19 +345,26 @@
         const lx = rx + Math.cos(rayAngle) * distPx;
         const ly = ry + Math.sin(rayAngle) * distPx;
 
-        ctx.strokeStyle = tofRayColor;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
         ctx.moveTo(rx, ry);
         ctx.lineTo(lx, ly);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.arc(lx, ly, 1.5, 0, Math.PI * 2);
-        ctx.fillStyle = tofHitColor;
-        ctx.fill();
-
       });
+      ctx.stroke();
+
+      ctx.fillStyle = tofHitColor;
+      ctx.beginPath();
+      scanPoints.forEach((/** @type {ScanPoint} */ p) => {
+        if (!p.valid) return;
+        const rayAngle = (roverPose.headingDeg -
+          roverCalibration.scanner.forwardAngleDeg +
+          (p.angle_deg - roverCalibration.scanner.forwardAngleDeg) +
+          roverCalibration.scanner.bearingOffsetDeg) * (Math.PI / 180);
+        const distPx = (p.distance_mm / 20) * zoom;
+        const lx = rx + Math.cos(rayAngle) * distPx;
+        const ly = ry + Math.sin(rayAngle) * distPx;
+        ctx.moveTo(lx + 1.5, ly);
+        ctx.arc(lx, ly, 1.5, 0, Math.PI * 2);
+      });
+      ctx.fill();
     }
 
     // 6. Top-view rover. With an unknown pose it stays at the local origin,
@@ -383,6 +411,10 @@
   /** @param {PointerEvent} e */
   function handlePointerDown(e) {
     if (e.button !== 0) return;
+    if (followRover && hasPoseEvidence) {
+      panX = -roverPose.x * zoom;
+      panY = -roverPose.y * zoom;
+    }
     followRover = false;
     isDragging = true;
     dragStart = { x: e.clientX - panX, y: e.clientY - panY };
@@ -393,7 +425,7 @@
     if (!isDragging) return;
     panX = e.clientX - dragStart.x;
     panY = e.clientY - dragStart.y;
-    drawMap();
+    scheduleDraw();
   }
 
   function handlePointerUp() {
@@ -405,7 +437,7 @@
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.12 : 0.88;
     zoom = Math.max(0.3, Math.min(3.5, zoom * factor));
-    drawMap();
+    scheduleDraw();
   }
 
   /** @param {MouseEvent} e */
@@ -415,8 +447,10 @@
     const rect = canvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
-    const cx = canvas.width / 2 + panX;
-    const cy = canvas.height / 2 + panY;
+    const viewPanX = followRover ? -roverPose.x * zoom : panX;
+    const viewPanY = followRover ? -roverPose.y * zoom : panY;
+    const cx = canvas.width / 2 + viewPanX;
+    const cy = canvas.height / 2 + viewPanY;
 
     const mapX = +((clickX - cx) / zoom).toFixed(1);
     const mapY = +((clickY - cy) / zoom).toFixed(1);
@@ -428,31 +462,31 @@
       y: Math.floor((mapY / pixelsPerMeter) /
         (mapEvidence?.cellSizeM || roverCalibration.map.cellSizeM))
     });
-    drawMap();
+    scheduleDraw();
   }
 
   function zoomIn() {
     zoom = Math.min(3.5, zoom * 1.2);
-    drawMap();
+    scheduleDraw();
   }
 
   function zoomOut() {
     zoom = Math.max(0.3, zoom / 1.2);
-    drawMap();
+    scheduleDraw();
   }
 
   function resetView() {
     zoom = 1.0;
     followRover = true;
-    panX = hasPoseEvidence ? -roverPose.x * zoom : 0;
-    panY = hasPoseEvidence ? -roverPose.y * zoom : 0;
-    drawMap();
+    panX = 0;
+    panY = 0;
+    scheduleDraw();
   }
 
   function clearMap() {
     obstaclePoints = [];
     exploredTrail = [{ x: roverPose.x, y: roverPose.y }];
-    drawMap();
+    scheduleDraw();
   }
 
   onMount(() => {
@@ -480,23 +514,21 @@
     };
     resize();
 
-    const trailInterval = setInterval(() => {
-      if (isRecording && isConnected) {
-        const lastPt = exploredTrail[exploredTrail.length - 1];
-        if (!lastPt || Math.hypot(lastPt.x - roverPose.x, lastPt.y - roverPose.y) > 6) {
-          exploredTrail = [...exploredTrail,
-            { x: roverPose.x, y: roverPose.y }];
-          scheduleDraw();
-        }
-      }
-    }, 250);
-
     const resizeObserver = typeof ResizeObserver === 'undefined'
       ? null : new ResizeObserver(resize);
     if (canvas?.parentElement) resizeObserver?.observe(canvas.parentElement);
     if (!resizeObserver) window.addEventListener('resize', resize);
+    const intersectionObserver = typeof IntersectionObserver === 'undefined'
+      ? null : new IntersectionObserver(([entry]) => {
+        canvasVisible = entry?.isIntersecting !== false;
+        if (canvasVisible) scheduleDraw();
+      });
+    if (canvas) intersectionObserver?.observe(canvas);
     const handleVisibility = () => {
-      if (!document.hidden) scheduleDraw();
+      if (document.hidden && drawFrame) {
+        cancelAnimationFrame(drawFrame);
+        drawFrame = 0;
+      } else scheduleDraw();
     };
     document.addEventListener('visibilitychange', handleVisibility);
     scheduleDraw();
@@ -504,8 +536,8 @@
     return () => {
       window.removeEventListener('ui:themechange', handleThemeChange);
       observer.disconnect();
-      clearInterval(trailInterval);
       resizeObserver?.disconnect();
+      intersectionObserver?.disconnect();
       if (!resizeObserver) window.removeEventListener('resize', resize);
       document.removeEventListener('visibilitychange', handleVisibility);
       cancelAnimationFrame(drawFrame);
@@ -537,7 +569,7 @@
     <button
       type="button"
       class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showTrajectory ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
-      onclick={() => { showTrajectory = !showTrajectory; drawMap(); }}
+      onclick={() => { showTrajectory = !showTrajectory; scheduleDraw(); }}
       title="Toggle Trajectory Layer"
     >
       Trajectory
@@ -545,7 +577,7 @@
     <button
       type="button"
       class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showObstacles ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
-      onclick={() => { showObstacles = !showObstacles; drawMap(); }}
+      onclick={() => { showObstacles = !showObstacles; scheduleDraw(); }}
       title="Toggle Obstacle Hits"
     >
       Obstacles
@@ -553,7 +585,7 @@
     <button
       type="button"
       class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showTofRays ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
-      onclick={() => { showTofRays = !showTofRays; drawMap(); }}
+      onclick={() => { showTofRays = !showTofRays; scheduleDraw(); }}
       title="Toggle ToF rays"
     >
       ToF rays
@@ -561,7 +593,7 @@
     <button
       type="button"
       class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showInflation ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
-      onclick={() => { showInflation = !showInflation; drawMap(); }}
+      onclick={() => { showInflation = !showInflation; scheduleDraw(); }}
       title="Toggle inflated no-go cells"
     >
       Inflation
@@ -569,7 +601,7 @@
     <button
       type="button"
       class="px-2.5 py-1 rounded-md text-sm font-medium border transition-colors duration-150 {showFrontiers ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary-container)] shadow-sm' : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-transparent hover:bg-[var(--md-sys-color-surface-container-highest)] hover:text-[var(--md-sys-color-on-surface)]'}"
-      onclick={() => { showFrontiers = !showFrontiers; drawMap(); }}
+      onclick={() => { showFrontiers = !showFrontiers; scheduleDraw(); }}
       title="Toggle exploration boundaries"
     >
       Frontiers
